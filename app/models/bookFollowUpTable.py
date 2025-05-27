@@ -11,8 +11,8 @@ class BookFollowUpTable(Base):
     bookNo = Column(String(10), nullable=True)
     bookDate = Column(Date, nullable=True)
     directoryName = Column(Unicode, nullable=True)
-    IncomingNo = Column(String(10), nullable=True)
-    IncomingDate = Column(Date, nullable=True)
+    incomingNo = Column(String(10), nullable=True)
+    incomingDate = Column(Date, nullable=True)
     subject = Column(Unicode(500), nullable=True)
     destination = Column(Unicode(300), nullable=True)
     bookAction = Column(Unicode(500), nullable=True)
@@ -33,8 +33,8 @@ class BookFollowUpCreate(BaseModel):
     bookNo: Optional[str]= None
     bookDate: Optional[date]= None
     directoryName: Optional[str]= None
-    IncomingNo: Optional[str]= None
-    IncomingDate: Optional[date]= None
+    incomingNo: Optional[str]= None
+    incomingDate: Optional[date]= None
     subject: Optional[str]= None
     destination: Optional[str]= None
     bookAction: Optional[str]= None
@@ -50,8 +50,8 @@ class BookFollowUpResponse(BaseModel):
     bookNo: Optional[str]= None
     bookDate: Optional[date]= None
     directoryName: Optional[str]= None
-    IncomingNo: Optional[str]= None
-    IncomingDate: Optional[date]= None
+    incomingNo: Optional[str]= None
+    incomingDate: Optional[date]= None
     subject: Optional[str]= None
     destination: Optional[str]= None
     bookAction: Optional[str]= None
