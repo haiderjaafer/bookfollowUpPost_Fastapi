@@ -2,6 +2,10 @@ from sqlalchemy import Column, Integer, String, Date,Unicode
 from app.database.database import Base
 
 
+from pydantic import BaseModel
+from datetime import date
+from typing import Optional
+
 
 class BookFollowUpTable(Base):
     __tablename__ = "bookFollowUpTable"
@@ -23,9 +27,7 @@ class BookFollowUpTable(Base):
 
 
 
-from pydantic import BaseModel
-from datetime import date
-from typing import Optional
+
 
 
 class BookFollowUpCreate(BaseModel):
