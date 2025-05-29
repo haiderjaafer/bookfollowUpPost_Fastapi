@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     DATABASE_USER: str
     DATABASE_PASSWORD: str
     DATABASE_DRIVER: str = "ODBC Driver 17 for SQL Server"
-    PDF_BASE_PATH: str = 'D:/order_pdfs'
+    #PDF_BASE_PATH: str = 'D:/order_pdfs'
+    PDF_UPLOAD_PATH:str
     MODE: str
 
     class Config:

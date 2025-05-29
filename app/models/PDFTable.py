@@ -1,13 +1,13 @@
 from sqlalchemy import Column, Integer, String, Date, ForeignKey
 from sqlalchemy.orm import relationship
-from app.database import Base
+from app.database.database import Base
 
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
 
-class PDF(Base):
-    __tablename__ = "pdf"
+class PDFTable(Base):
+    __tablename__ = "PDFTable"
 
     id = Column(Integer, primary_key=True, index=True)
     bookID = Column(Integer,  nullable=True)
@@ -33,6 +33,7 @@ class PDFCreate(BaseModel):
 
 class PDFResponse(PDFCreate):
     id: int
+    currentDate: date
 
     class Config:
         orm_mode = True

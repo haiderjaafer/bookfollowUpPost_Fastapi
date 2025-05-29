@@ -2,27 +2,19 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.bookFollowUpTable import BookFollowUpTable
 from app.models.bookFollowUpTable import BookFollowUpCreate
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import date
 
-class BookFollowUpClass:
-    
+
+from sqlalchemy.orm import Session
+from app.models.bookFollowUpTable import BookFollowUpTable, BookFollowUpCreate
+
+class BookFollowUpService:
     @staticmethod
-    def create_book_follow_up(db: Session, book_data: BookFollowUpCreate) -> BookFollowUpTable:
-        new_record = BookFollowUpTable(
-            bookType=book_data.bookType,
-            bookNo=book_data.bookNo,
-            bookDate=book_data.bookDate,
-            directoryName=book_data.directoryName,
-            incomingNo=book_data.incomingNo,
-            incomingDate=book_data.incomingDate,
-            subject=book_data.subject,
-            destination=book_data.destination,
-            bookAction=book_data.bookAction,
-            bookStatus=book_data.bookStatus,
-            notes=book_data.notes,
-            currentDate=datetime.now().date(),
-            userID=book_data.userID
-        )
-        db.add(new_record)
+    def insert_book(db: Session, book: BookFollowUpCreate) -> int:
+        new_book = BookFollowUpTable(**book.model_dump())
+        db.add(new_book)
         db.commit()
-        db.refresh(new_record)
-        return new_record
+        db.refresh(new_book)
+        return new_book.id
+
