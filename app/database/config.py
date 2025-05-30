@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     DATABASE_DRIVER: str = "ODBC Driver 17 for SQL Server"
     #PDF_BASE_PATH: str = 'D:/order_pdfs'
     PDF_UPLOAD_PATH:str
+    PDF_SOURCE_PATH: str   
+
     MODE: str
 
     class Config:
@@ -31,6 +33,7 @@ class Settings(BaseSettings):
             f"MARS_Connection=Yes;"
             f"CHARSET=UTF8;"
         )
-        return f"mssql+pyodbc:///?odbc_connect={params}"
+        return f"mssql+aioodbc:///?odbc_connect={params}"
+
 
 settings = Settings()

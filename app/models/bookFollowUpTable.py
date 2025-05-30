@@ -42,7 +42,7 @@ class BookFollowUpCreate(BaseModel):
     bookAction: Optional[str]= None
     bookStatus: Optional[str]= None
     notes: Optional[str]= None
-   # currentDate: Optional[date]= None
+    currentDate: Optional[date]= None
     userID: Optional[int]= None
 
 
@@ -59,8 +59,8 @@ class BookFollowUpResponse(BaseModel):
     bookAction: Optional[str]= None
     bookStatus: Optional[str]= None
     notes: Optional[str]= None
-    #currentDate: Optional[date]= None
+    currentDate: Optional[date]= None
     userID: Optional[int]= None
 
     class Config:
-        orm_mode = True
+        from_attributes = True

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Date, ForeignKey
-from sqlalchemy.orm import relationship
+#from sqlalchemy.orm import relationship
 from app.database.database import Base
 
 from pydantic import BaseModel
@@ -36,4 +36,4 @@ class PDFResponse(PDFCreate):
     currentDate: date
 
     class Config:
-        orm_mode = True
+        from_attributes = True

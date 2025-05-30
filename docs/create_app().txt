@@ -1,0 +1,35 @@
+Should create_app() be async?
+Your current create_app() function is synchronous and works perfectly for FastAPI apps.
+
+The only async part you have is the lifespan function, which you provided as an async context manager (@asynccontextmanager async def lifespan(app: FastAPI):).
+
+When should create_app() be async?
+If your app initialization involves async I/O operations (e.g., making async database calls, async file reads, etc.), then making create_app() async might help.
+
+But in most typical FastAPI apps, create_app() is sync because it just creates the FastAPI instance, sets up middleware, routes, etc.—all synchronous operations.
+
+
+Your case
+Your create_app() currently only:
+
+Instantiates FastAPI()
+
+Adds middleware
+
+Includes routes
+
+Returns the app instance
+
+None of these need to be async.
+
+Verdict
+No need to make create_app() async unless you have async setup tasks inside it.
+
+Your async lifespan context manager is the right place for async startup/shutdown code.
+
+Bonus: what if you make create_app() async?
+You would then need to await create_app() wherever you call it, which complicates usage.
+
+FastAPI expects the app instance to be available synchronously when passed to uvicorn.run() or other ASGI servers.
+
+So generally, keep create_app() synchronous.

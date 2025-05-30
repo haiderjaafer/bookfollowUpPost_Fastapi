@@ -1,20 +1,23 @@
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, Form, Depends
-from sqlalchemy.orm import Session  # ✅ not AsyncSession
-from app.database.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
+from app.database.database import get_async_db  # ✅ Import async DB dependency
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
-from app.helper.save_pdf import save_pdf_to_server
+from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving the uploaded file
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate
 from app.models.bookFollowUpTable import BookFollowUpCreate
 
+# ✅ Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
 
+# ✅ POST endpoint to add a book and upload a related PDF file
 @bookFollowUpRouter.post("")
-def add_book_with_pdf(
-    bookNo: str = Form(...),      # will send data as key-value pairs in form-data with file 
+async def add_book_with_pdf(
+    # ✅ Receive form data fields
+    bookNo: str = Form(...),
     bookDate: str = Form(...),
     bookType: str = Form(...),
     directoryName: str = Form(...),
@@ -26,45 +29,52 @@ def add_book_with_pdf(
     bookStatus: str = Form(...),
     notes: str = Form(...),
     userID: str = Form(...),
-    file: UploadFile = Form(...),
-    db: Session = Depends(get_db)  
+    file: UploadFile = Form(...),  # ✅ File is sent in multipart form
+    db: AsyncSession = Depends(get_async_db)  # ✅ Use Async DB session
 ):
-    # Insert book
-    book_id = BookFollowUpService.insert_book(db, BookFollowUpCreate(
-        bookNo=bookNo, bookDate=bookDate, bookType=bookType, directoryName=directoryName,
-        incomingNo=incomingNo, incomingDate=incomingDate, subject=subject,
-        destination=destination, bookAction=bookAction, bookStatus=bookStatus,
-        notes=notes, userID=userID
-    ))
+    # ✅ Insert book record into DB using BookFollowUpService
+    book_data = BookFollowUpCreate(
+        bookNo=bookNo,
+        bookDate=bookDate,
+        bookType=bookType,
+        directoryName=directoryName,
+        incomingNo=incomingNo,
+        incomingDate=incomingDate,
+        subject=subject,
+        destination=destination,
+        bookAction=bookAction,
+        bookStatus=bookStatus,
+        notes=notes,
+        currentDate=datetime.now().date(),
+        userID=userID
+    )
+    book_id = await BookFollowUpService.insert_book(db, book_data)
 
-    # Count PDFs
-    count = PDFService.get_pdf_count(db, book_id)
+    # ✅ Count how many PDFs are already associated with this book
+    count = await PDFService.get_pdf_count(db, book_id)
 
-
-    # Save file
+    # ✅ Save uploaded file to the destination path and return the new path
     upload_dir = settings.PDF_UPLOAD_PATH
     pdf_path = save_pdf_to_server(file.file, bookNo, bookDate, count, upload_dir)
 
-
-    # Insert PDF record
-    PDFService.insert_pdf(db, PDFCreate(
+    # ✅ Create a new PDF record to store in the PDFTable
+    pdf_data = PDFCreate(
         bookID=book_id,
         bookNo=bookNo,
         countPdf=count,
         pdf=pdf_path,
-        userID=userID,
-        currentDate=datetime.now().date()  # ✅ Only the date part
+        userID=int(userID),  # ✅ Ensure this is an integer
+        currentDate=datetime.now().date()  # ✅ Convert datetime to date only
+    )
+    await PDFService.insert_pdf(db, pdf_data)
 
-    ))
-
-
-      # ✅ Delete the original file from scanner folder
+    # ✅ Attempt to delete the original uploaded file from scanner folder
     try:
-        # Save uploaded file temporarily to scanner folder
-        scanner_dir = r"D:\booksFollowUp\pdfScanner"
-        os.remove(scanner_dir)
+        # This assumes the file has been saved temporarily at the path below
+        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+        os.remove(scanner_path)
     except Exception as e:
-        print(f"Warning: Could not delete original file {scanner_dir}. Reason: {e}")
+        print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {e}")
 
-
+    # ✅ Return success response with inserted book ID
     return {"message": "Book and PDF saved successfully", "bookID": book_id}

@@ -1,67 +1,57 @@
+# ✅ Import FastAPI core
 from fastapi import FastAPI
+
+# ✅ CORS middleware to allow frontend (like React on localhost:3000) to access the API
 from fastapi.middleware.cors import CORSMiddleware
+
+# ✅ Context manager to define startup/shutdown behavior
 from contextlib import asynccontextmanager
 
+# ✅ SQLAlchemy engine and base (used to create tables)
+from app.database.database import engine, Base
 
-# ================= Application Setup =================
-
-from app.database.database import engine , Base
+# ✅ Custom app settings from .env or config file
 from app.database.config import settings
 
-#print("Using DB URL:", settings.sqlalchemy_database_url)
-
-
-# all routes imports
+# ✅ Import your route modules
 from app.routes.bookFollowUp import bookFollowUpRouter
-# from app.routes.committee import committee_router
-# from app.routes.department import department_router
-# from app.routes.estimator import estimatorRouter
-# from app.routes.pdf import routerPdf
-# from app.routes.procedure import procedureRouter
-
-
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.MODE.upper() == "DEVELOPMENT":   # always safe
+    if settings.MODE.upper() == "DEVELOPMENT":  # Ensures dev mode is case-insensitive
         print("🌱 DEVELOPMENT mode: creating database tables...")
-        Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)  # Create tables from models
     else:
         print("🚀 PRODUCTION mode: skipping table creation.")
 
-    yield  # always yield after preparing
+    yield  # ✅ Allows the application to continue startup
 
 
+def create_app() -> FastAPI:              #create_app() just defines a factory function returning a FastAPI app.
 
-def create_app() -> FastAPI:
     app = FastAPI(
-        title="BookFollowUp API",
+        title="BookFollowUp API",         # Shown in docs
         version="1.0.0",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        lifespan=lifespan
+        docs_url="/api/docs",             # Swagger UI
+        redoc_url="/api/redoc",           # ReDoc UI
+        lifespan=lifespan                 # Hook startup logic
     )
 
+    # ✅ Enable CORS for frontend (e.g., Next.js or React app on port 3000)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
+        allow_origins=["http://localhost:3000"],  #  Update if your frontend is hosted elsewhere
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["*"]
     )
 
+    # ✅ Register routers
     app.include_router(bookFollowUpRouter)
-    # app.include_router(committee_router)
-    # app.include_router(department_router)
-    # app.include_router( estimatorRouter )
-    # app.include_router(routerPdf)  
-    # app.include_router(procedureRouter)   
-      
 
- 
     return app
 
-app = create_app()
 
+app = create_app()
