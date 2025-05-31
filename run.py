@@ -24,8 +24,10 @@ if __name__ == "__main__":
     # - listening on all interfaces (0.0.0.0)
     # - port 9000
     # - reload enabled for hot-reloading on code changes (development only)
-    #uvicorn.run("app.main:app", host="0.0.0.0", port=9000, reload=True)
-   uvicorn.run(app, host=host, port=port, reload=True,log_level="info")
+    uvicorn.run("app.main:app", host="0.0.0.0", port=9000, reload=True,reload_dirs=["app"])
+   #uvicorn.run(app, host=host, port=port, reload=True,log_level="info")
+
+   #reload_dirs=["app"] is to only watch critical folders, like app and This avoids watching .venv, migrations, or node_modules.
 
 
 

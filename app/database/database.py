@@ -2,6 +2,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
 from app.database.config import settings
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
 
 # Create async engine for SQL Server using aioodbc
 engine = create_async_engine(
@@ -25,10 +28,15 @@ AsyncSessionLocal = sessionmaker(
 # Base class for ORM models
 Base = declarative_base()
 
-# Dependency function for getting the async DB session
-async def get_async_db():
-    try:
-        async with AsyncSessionLocal() as session:
-            yield session
-    except OperationalError as e:
-        raise ConnectionError("Could not connect to SQL Server") from e
+# The async with statement automatically closes the session after the response is sent, even if an exception occurs inside the route. 
+# FastAPI handles the generator behind the scenes using contextlib.aclosing().
+async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+# And FastAPI will automatically:
+
+# Open the session when the request starts.
+
+# Close it after the request finishes or if an error occurs

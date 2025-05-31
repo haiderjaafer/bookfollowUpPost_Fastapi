@@ -78,3 +78,64 @@ async def add_book_with_pdf(
 
     # ✅ Return success response with inserted book ID
     return {"message": "Book and PDF saved successfully", "bookID": book_id}
+
+
+
+
+@bookFollowUpRouter.post("/add-supplement")
+async def add_supplement_pdf(
+    bookID: int = Form(...),
+    bookNo: str = Form(...),
+    bookDate: str = Form(...),
+    userID: int = Form(...),
+    file: UploadFile = Form(...),
+    db: AsyncSession = Depends(get_async_db)
+):
+    print(f"supplement ...")
+    # 1. Get current count of pdfs for bookID
+    count = await PDFService.get_pdf_count_async(db, bookID)
+    
+    print(f"supplement count... {count}")
+    print(f"supplement bookID... {bookID}")
+
+    # 2. Save PDF to server (increment count for filename)
+    upload_dir = settings.PDF_UPLOAD_PATH
+   #print(f"upload_dir -PDF_UPLOAD_PATH \env------- {settings.PDF_UPLOAD_PATH}")
+
+    pdf_path = save_pdf_to_server(file.file, bookNo, bookDate, count, upload_dir)
+
+    # print("upload_dir"+ upload_dir)
+
+    # # 3. Insert PDF record with incremented countPdf = count + 1
+    pdf_record = PDFCreate(
+        bookID=bookID,
+        bookNo=bookNo,
+        countPdf=count + 1,
+        pdf=pdf_path,
+        userID=userID,
+        currentDate=datetime.now().date()
+    )
+    await PDFService.insert_pdf(db, pdf_record)
+    
+    try:
+        # This assumes the file has been saved temporarily at the path below
+        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+        os.remove(scanner_path)
+    except Exception as e:
+        print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {e}")
+
+    return {"message": "Supplement PDF added successfully", "pdfCount": count + 1,
+            "PDF_UPLOAD_PATH":settings.PDF_UPLOAD_PATH.as_posix()}
+
+
+   # return {"PDF_UPLOAD_PATH":settings.PDF_UPLOAD_PATH.as_posix()}
+
+
+@bookFollowUpRouter.get("/test-path")
+async def test_path():
+    return {
+        "PDF_UPLOAD_PATH": settings.PDF_UPLOAD_PATH.as_posix(),
+        "PDF_SOURCE_PATH": settings.PDF_SOURCE_PATH.as_posix(),
+    }
+
+
