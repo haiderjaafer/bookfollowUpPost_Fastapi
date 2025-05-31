@@ -2,10 +2,7 @@ from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from pathlib import Path
 import urllib.parse
-from fastapi import APIRouter
 
-# Initialize the router
-bookFollowUpRouter = APIRouter()
 
 # ================= Configuration =================
 class Settings(BaseSettings):
@@ -50,4 +47,4 @@ class Settings(BaseSettings):
 # Instantiate settings
 settings = Settings()
 
-# Route to test paths
+
