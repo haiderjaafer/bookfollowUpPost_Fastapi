@@ -13,8 +13,8 @@ import os
 # Print the database connection string (useful for debugging)
 #print("Using DB URL:", settings.sqlalchemy_database_url)
 
-host = os.getenv("HOST", "0.0.0.0")
-port = int(os.getenv("PORT", 9000))
+# host = os.getenv("HOST", "0.0.0.0")
+# port = int(os.getenv("PORT", 9000))
 
 
 # Only run the server if this script is executed directly

@@ -1,5 +1,6 @@
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, Form, Depends
+from typing import Optional
+from fastapi import APIRouter, Query, UploadFile, Form, Depends
 from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  # ✅ Import async DB dependency
 from app.services.bookFollowUp import BookFollowUpService
@@ -138,4 +139,24 @@ async def test_path():
         "PDF_SOURCE_PATH": settings.PDF_SOURCE_PATH.as_posix(),
     }
 
+
+
+@bookFollowUpRouter.get("/getAllBooksNo", response_model=list[str])
+async def getAllBooksNo(db: AsyncSession = Depends(get_async_db)):
+    print("getAllBooksNo ... route")
+    return await BookFollowUpService.getAllBooksNo(db)
+
+
+@bookFollowUpRouter.get("/getAllIncomingNo", response_model=list[Optional[str]])
+async def getAllIncomingNo(db: AsyncSession = Depends(get_async_db)):
+    return await BookFollowUpService.getAllIncomingNo(db)
+
+
+
+@bookFollowUpRouter.get("/getAllDirectoryNames", response_model=list[str])
+async def get_all_directory_names(
+    search: str = Query(default="", description="Partial match for directoryName"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    return await BookFollowUpService.searchDirectoryNames(db, search)
 
