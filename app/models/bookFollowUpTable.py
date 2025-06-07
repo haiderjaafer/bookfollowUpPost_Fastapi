@@ -4,7 +4,7 @@ from app.database.database import Base
 
 from pydantic import BaseModel
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 
 class BookFollowUpTable(Base):
@@ -64,3 +64,12 @@ class BookFollowUpResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+class PaginatedOrderOut(BaseModel):
+    data: List[BookFollowUpResponse]
+    total: int
+    page: int
+    limit: int
+    totalPages: int

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Query, UploadFile, Form, Depends
+from fastapi import APIRouter, Query, Request, UploadFile, Form, Depends
 from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  # ✅ Import async DB dependency
 from app.services.bookFollowUp import BookFollowUpService
@@ -9,7 +9,7 @@ from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate
-from app.models.bookFollowUpTable import BookFollowUpCreate
+from app.models.bookFollowUpTable import BookFollowUpCreate, PaginatedOrderOut
 
 # ✅ Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
@@ -159,4 +159,30 @@ async def get_all_directory_names(
     db: AsyncSession = Depends(get_async_db)
 ):
     return await BookFollowUpService.searchDirectoryNames(db, search)
+
+
+
+@bookFollowUpRouter.get("/getAll", response_model=PaginatedOrderOut)
+async def get_BookFollowUp(
+    request: Request,
+    db: AsyncSession = Depends(get_async_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    bookNo : Optional[str] = Query(None),
+    bookStatus: Optional[str] = Query(None, enum=["منجز", "قيد الانجاز","مداولة"]),
+    bookType: Optional[str] = Query(None),
+    directoryName: Optional[str] = Query(None),
+    incomingNo: Optional[str] = Query(None)
+):
+    return await BookFollowUpService.getAllorderNo(
+        request=request,
+        db=db,
+        page=page,
+        limit=limit,
+        bookNo= bookNo,
+        bookStatus=bookStatus,
+        bookType=bookType,
+        directoryName=directoryName,
+        incomingNo=incomingNo
+    )
 
