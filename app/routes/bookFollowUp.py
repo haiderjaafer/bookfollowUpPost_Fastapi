@@ -1,6 +1,8 @@
-from datetime import datetime
-from typing import Optional
-from fastapi import APIRouter, Query, Request, UploadFile, Form, Depends
+from datetime import datetime,timedelta
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
+import pydantic
+from sqlalchemy import select,extract,func
 from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  # ✅ Import async DB dependency
 from app.services.bookFollowUp import BookFollowUpService
@@ -9,7 +11,10 @@ from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate
-from app.models.bookFollowUpTable import BookFollowUpCreate, PaginatedOrderOut
+from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, PaginatedOrderOut
+from sqlalchemy.sql.expression import cast
+from sqlalchemy.types import Date
+
 
 # ✅ Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
@@ -186,3 +191,136 @@ async def get_BookFollowUp(
         incomingNo=incomingNo
     )
 
+
+
+
+@bookFollowUpRouter.get("/checkBookNoExistsForDebounce")
+async def check_order_exists(
+    bookType: str = Query(..., alias="bookType"),  # Required query parameter for book type
+    bookNo: str = Query(..., alias="bookNo"),      # Required query parameter for book number
+    bookDate: str = Query(..., alias="bookDate"),  # Required query parameter for full date (YYYY-MM-DD)
+    db: AsyncSession = Depends(get_async_db),      # Async database session dependency
+):
+    """
+    Check if a book record exists based on bookType, bookNo, and the year of bookDate.
+    Expects bookDate as YYYY-MM-DD, extracts the year, and matches against the year of bookDate in the database.
+    Returns {"exists": true} if found, {"exists": false} otherwise.
+    """
+    print("checkBookNoExistsForDebounce")  # Debug log to confirm endpoint is hit
+    print(f"Received: bookType={bookType}, bookNo={bookNo}, bookDate={bookDate}")  # Debug input values
+
+    # Validate and extract year from bookDate
+    try:
+        # Parse the input date to ensure it's in YYYY-MM-DD format//// Validation: Uses datetime.strptime to parse the date and validate the format
+        parsed_date = datetime.strptime(bookDate.strip(), "%Y-%m-%d")
+        year = parsed_date.year  # Extract the year
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD (e.g., 2025-06-08)")
+
+    # Build async query to check for existence
+    query = select(BookFollowUpTable).filter(
+        BookFollowUpTable.bookType == bookType.strip(),  # Match bookType (strip whitespace)
+        BookFollowUpTable.bookNo == bookNo.strip(),      # Match bookNo (strip whitespace)
+        extract('year', BookFollowUpTable.bookDate) == year   # this year front-end ... from Match year of bookDate //// SQLAlchemy extract: Uses extract('year', BookFollowUpTable.bookDate) to extract the year from the bookDate column in the database:
+
+
+    )
+
+    try:
+        # Execute query and fetch the first result
+        result = await db.execute(query)
+        book = result.scalars().first()  # Get the first matching record (or None if none found)
+        print(f"Query result: {book}")  # Debug query result
+        return {"exists": bool(book)}  # Return existence as boolean
+    except Exception as e:
+        print(f"Database error: {str(e)}")  # Debug database errors
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+
+
+
+# class LateBookResponse(pydantic.BaseModel):
+#     id: int
+#     bookType: str | None
+#     bookNo: str | None
+#     bookDate: str | None
+#     directoryName: str | None
+#     incomingNo: str | None  # Corrected case
+#     incomingDate: str | None  # Corrected case
+#     subject: str | None
+#     destination: str | None
+#     bookAction: str | None
+#     bookStatus: str | None
+#     notes: str | None
+#     countOfLateBooks: int
+#     currentDate: str | None
+
+#     class Config:
+#         from_attributes = True
+
+@bookFollowUpRouter.get("/lateBooks", response_model=List[BookFollowUpResponse])
+async def get_late_books(db: AsyncSession = Depends(get_async_db)):
+    """
+    Retrieve books with status 'قيد الانجاز' and incomingDate within the last 5 days.
+    Returns a list of books with their details and the number of days late (calculated in Python).
+    """
+    try:
+        # Get current date for comparison
+        current_date = datetime.now().date()
+        start_date = current_date - timedelta(days=5)
+
+        # Build query
+        query = select(
+            BookFollowUpTable.id,
+            BookFollowUpTable.bookType,
+            BookFollowUpTable.bookNo,
+            BookFollowUpTable.bookDate,
+            BookFollowUpTable.directoryName,
+            BookFollowUpTable.incomingNo,  # Corrected case
+            BookFollowUpTable.incomingDate,  # Corrected case
+            BookFollowUpTable.subject,
+            BookFollowUpTable.destination,
+            BookFollowUpTable.bookAction,
+            BookFollowUpTable.bookStatus,
+            BookFollowUpTable.notes,
+            BookFollowUpTable.currentDate
+        ).filter(
+            BookFollowUpTable.bookStatus == 'قيد الانجاز',
+            cast(BookFollowUpTable.incomingDate, Date) >= start_date,
+            cast(BookFollowUpTable.incomingDate, Date) <= current_date
+        ).order_by(
+            BookFollowUpTable.incomingDate.asc()
+        )
+
+        # Execute query
+        result = await db.execute(query)
+        late_books = result.fetchall()
+
+        # Format response and calculate days late
+        response = []
+        for book in late_books:
+            # Calculate days late (no .date() needed)
+            days_late = (current_date - book.incomingDate).days if book.incomingDate else 0
+            response.append({
+                "id": book.id,
+                "bookType": book.bookType,
+                "bookNo": book.bookNo,
+                "bookDate": book.bookDate.strftime('%Y-%m-%d') if book.bookDate else None,
+                "directoryName": book.directoryName,
+                "incomingNo": book.incomingNo,  # Corrected case
+                "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,  # Corrected case
+                "subject": book.subject,
+                "destination": book.destination,
+                "bookAction": book.bookAction,
+                "bookStatus": book.bookStatus,
+                "notes": book.notes,
+                "countOfLateBooks": days_late,
+                "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None
+            })
+
+        print(f"Fetched {len(response)} late books")  # Debug log
+        return response
+    except Exception as e:
+        print(f"Error fetching late books: {str(e)}")  # Debug log
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

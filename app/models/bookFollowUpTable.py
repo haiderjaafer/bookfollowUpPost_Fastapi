@@ -15,8 +15,8 @@ class BookFollowUpTable(Base):
     bookNo = Column(String(10), nullable=True)
     bookDate = Column(Date, nullable=True)
     directoryName = Column(Unicode, nullable=True)
-    incomingNo = Column(String(10), nullable=True)
-    incomingDate = Column(Date, nullable=True)
+    incomingNo = Column(String(10), nullable=True)   # fix IncomingNo with sql table
+    incomingDate = Column(Date, nullable=True)       # fix IncomingDate with sql table
     subject = Column(Unicode(500), nullable=True)
     destination = Column(Unicode(300), nullable=True)
     bookAction = Column(Unicode(500), nullable=True)
@@ -61,6 +61,7 @@ class BookFollowUpResponse(BaseModel):
     notes: Optional[str]= None
     currentDate: Optional[date]= None
     userID: Optional[int]= None
+    countOfLateBooks: Optional[int]= None 
 
     class Config:
         from_attributes = True
