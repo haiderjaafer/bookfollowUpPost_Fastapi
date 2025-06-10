@@ -1,5 +1,5 @@
-from datetime import datetime,timedelta
-from typing import List, Optional
+from datetime import datetime,timedelta, timezone
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
 import pydantic
 from sqlalchemy import select,extract,func
@@ -239,88 +239,115 @@ async def check_order_exists(
 
 
 
+class LateBookResponse(pydantic.BaseModel):
+    id: int
+    bookType: str | None
+    bookNo: str | None
+    bookDate: str | None
+    directoryName: str | None
+    incomingNo: str | None
+    incomingDate: str | None
+    subject: str | None
+    destination: str | None
+    bookAction: str | None
+    bookStatus: str | None
+    notes: str | None
+    countOfLateBooks: int
+    currentDate: str | None
+    userID: int | None
 
-# class LateBookResponse(pydantic.BaseModel):
-#     id: int
-#     bookType: str | None
-#     bookNo: str | None
-#     bookDate: str | None
-#     directoryName: str | None
-#     incomingNo: str | None  # Corrected case
-#     incomingDate: str | None  # Corrected case
-#     subject: str | None
-#     destination: str | None
-#     bookAction: str | None
-#     bookStatus: str | None
-#     notes: str | None
-#     countOfLateBooks: int
-#     currentDate: str | None
+    class Config:
+        from_attributes = True
 
-#     class Config:
-#         from_attributes = True
-
-@bookFollowUpRouter.get("/lateBooks", response_model=List[BookFollowUpResponse])
-async def get_late_books(db: AsyncSession = Depends(get_async_db)):
+@bookFollowUpRouter.get("/lateBooks", response_model=Dict[str, Any])
+async def get_late_books(
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    limit: int = Query(10, ge=1, le=100, description="Records per page"),
+    db: AsyncSession = Depends(get_async_db)
+):
     """
-    Retrieve books with status 'قيد الانجاز' and incomingDate within the last 5 days.
-    Returns a list of books with their details and the number of days late (calculated in Python).
+    Retrieve late books (status 'قيد الانجاز', incomingDate within last 5 days) with pagination.
+    Returns paginated data with total count, page, limit, and total pages.
     """
     try:
-        # Get current date for comparison
-        current_date = datetime.now().date()
+        # Get current date in +03:00 timezone
+        tz = timezone(timedelta(hours=3))  # +03:00 offset
+        current_date = datetime.now(tz).date()
         start_date = current_date - timedelta(days=5)
 
-        # Build query
+        # Step 1: Count total records
+        count_stmt = select(func.count()).select_from(
+            select(BookFollowUpTable.id).filter(
+                BookFollowUpTable.bookStatus == 'قيد الانجاز',
+                cast(BookFollowUpTable.incomingDate, Date) >= start_date,
+                cast(BookFollowUpTable.incomingDate, Date) <= current_date
+            ).subquery()
+        )
+        count_result = await db.execute(count_stmt)
+        total = count_result.scalar() or 0
+
+        # Step 2: Calculate offset
+        offset = (page - 1) * limit
+
+        # Step 3: Build query for paginated data
         query = select(
             BookFollowUpTable.id,
             BookFollowUpTable.bookType,
             BookFollowUpTable.bookNo,
             BookFollowUpTable.bookDate,
             BookFollowUpTable.directoryName,
-            BookFollowUpTable.incomingNo,  # Corrected case
-            BookFollowUpTable.incomingDate,  # Corrected case
+            BookFollowUpTable.incomingNo,
+            BookFollowUpTable.incomingDate,
             BookFollowUpTable.subject,
             BookFollowUpTable.destination,
             BookFollowUpTable.bookAction,
             BookFollowUpTable.bookStatus,
             BookFollowUpTable.notes,
-            BookFollowUpTable.currentDate
+            BookFollowUpTable.currentDate,
+            BookFollowUpTable.userID
         ).filter(
             BookFollowUpTable.bookStatus == 'قيد الانجاز',
             cast(BookFollowUpTable.incomingDate, Date) >= start_date,
             cast(BookFollowUpTable.incomingDate, Date) <= current_date
         ).order_by(
             BookFollowUpTable.incomingDate.asc()
-        )
+        ).offset(offset).limit(limit)
 
         # Execute query
         result = await db.execute(query)
         late_books = result.fetchall()
 
-        # Format response and calculate days late
-        response = []
-        for book in late_books:
-            # Calculate days late (no .date() needed)
-            days_late = (current_date - book.incomingDate).days if book.incomingDate else 0
-            response.append({
+        # Step 4: Format response and calculate days late
+        data = [
+            {
                 "id": book.id,
                 "bookType": book.bookType,
                 "bookNo": book.bookNo,
                 "bookDate": book.bookDate.strftime('%Y-%m-%d') if book.bookDate else None,
                 "directoryName": book.directoryName,
-                "incomingNo": book.incomingNo,  # Corrected case
-                "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,  # Corrected case
+                "incomingNo": book.incomingNo,
+                "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,
                 "subject": book.subject,
                 "destination": book.destination,
                 "bookAction": book.bookAction,
                 "bookStatus": book.bookStatus,
                 "notes": book.notes,
-                "countOfLateBooks": days_late,
-                "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None
-            })
+                "countOfLateBooks": (current_date - book.incomingDate).days if book.incomingDate else 0,
+                "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
+                "userID": book.userID
+            }
+            for book in late_books
+        ]
 
-        print(f"Fetched {len(response)} late books")  # Debug log
-        return response
+        # Step 5: Response
+        print(f"Fetched {len(data)} late books, Total: {total}, Page: {page}, Limit: {limit}")  # Debug
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "totalPages": (total + limit - 1) // limit
+        }
     except Exception as e:
-        print(f"Error fetching late books: {str(e)}")  # Debug log
+        print(f"Error fetching late books: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
