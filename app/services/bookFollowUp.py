@@ -6,6 +6,7 @@ from app.models.PDFTable import PDFTable
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate
 from sqlalchemy import select,func
 from fastapi import HTTPException, Request
+from app.models.users import Users
 
 
 class BookFollowUpService:
@@ -64,8 +65,12 @@ class BookFollowUpService:
 
   
 
+    
+ 
+
+
     @staticmethod
-    async def getAllorderNo(
+    async def getAllFilteredBooksNo(
         request: Request,
         db: AsyncSession,
         page: int = 1,
@@ -78,7 +83,7 @@ class BookFollowUpService:
     ) -> Dict[str, Any]:
         """
         Retrieve all BookFollowUpTable records with pagination, optional filters, and associated PDFs.
-        Returns data for DynamicTable with pdfFiles for each record.
+        Returns data for DynamicTable with pdfFiles and username for each record.
         """
         try:
             # Optional filters
@@ -103,12 +108,12 @@ class BookFollowUpService:
             )
             count_result = await db.execute(count_stmt)
             total = count_result.scalar() or 0
-            print(f"Total records: {total}, Page: {page}, Limit: {limit}")  # Debug
+            print(f"Total records: {total}, Page: {page}, Limit: {limit}")
 
             # Step 2: Pagination offset
             offset = (page - 1) * limit
 
-            # Step 3: Select paginated BookFollowUpTable records
+            # Step 3: Select paginated BookFollowUpTable records with username
             book_stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -125,7 +130,9 @@ class BookFollowUpService:
                     BookFollowUpTable.notes,
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
+                    Users.username
                 )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
                 .filter(*filters)
                 .distinct(BookFollowUpTable.bookNo)
                 .order_by(BookFollowUpTable.bookNo)
@@ -135,14 +142,19 @@ class BookFollowUpService:
             book_result = await db.execute(book_stmt)
             book_rows = book_result.fetchall()
 
-            # Step 4: Fetch PDFs for all bookNos in the current page
+            # Step 4: Fetch PDFs for all bookNos in the current page, including username
             book_nos = [row.bookNo for row in book_rows]
-            pdf_stmt = select(
-                PDFTable.id,
-                PDFTable.bookNo,
-                PDFTable.pdf,
-                PDFTable.currentDate
-            ).filter(PDFTable.bookNo.in_(book_nos))
+            pdf_stmt = (
+                select(
+                    PDFTable.id,
+                    PDFTable.bookNo,
+                    PDFTable.pdf,
+                    PDFTable.currentDate,
+                    Users.username
+                )
+                .outerjoin(Users, PDFTable.userID == Users.id)
+                .filter(PDFTable.bookNo.in_(book_nos))
+            )
             pdf_result = await db.execute(pdf_stmt)
             pdf_rows = pdf_result.fetchall()
 
@@ -154,7 +166,8 @@ class BookFollowUpService:
                 pdf_map[pdf.bookNo].append({
                     "id": pdf.id,
                     "pdf": pdf.pdf,
-                    "currentDate": pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None
+                    "currentDate": pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None,
+                    "username": pdf.username
                 })
 
             # Step 6: Format data
@@ -174,11 +187,12 @@ class BookFollowUpService:
                     "notes": row.notes,
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
-                    "pdfFiles": pdf_map.get(row.bookNo, [])  # Add PDFs for this bookNo
+                    "username": row.username,  # Add username for book creator
+                    "pdfFiles": pdf_map.get(row.bookNo, [])  # PDFs with their usernames
                 }
                 for row in book_rows
             ]
-            print(f"Fetched {len(data)} records with PDFs")  # Debug
+            print(f"Fetched {len(data)} records with PDFs")
 
             # Step 7: Response
             return {
@@ -189,7 +203,5 @@ class BookFollowUpService:
                 "totalPages": (total + limit - 1) // limit
             }
         except Exception as e:
-            print(f"Error fetching BookFollowUp records: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-    
+            print(f"Error fetching books: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")     

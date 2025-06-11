@@ -5,12 +5,13 @@ import pydantic
 from sqlalchemy import select,extract,func
 from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  # ✅ Import async DB dependency
+from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
 from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving the uploaded file
 import os
 from app.database.config import settings
-from app.models.PDFTable import PDFCreate, PDFTable
+from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, PaginatedOrderOut
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
@@ -173,7 +174,7 @@ async def get_all_directory_names(
 
 
 @bookFollowUpRouter.get("/getAll", response_model=Dict[str, Any])
-async def get_all_orders(
+async def getByFilterBooksNo(
     request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
@@ -184,7 +185,7 @@ async def get_all_orders(
     incomingNo: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_async_db)
 ) -> Dict[str, Any]:
-    return await BookFollowUpService.getAllorderNo(
+    return await BookFollowUpService.getAllFilteredBooksNo(
         request, db, page, limit, bookNo, bookStatus, bookType, directoryName, incomingNo
     )
 
@@ -351,33 +352,80 @@ async def get_late_books(
     
 
 
-
-
-@bookFollowUpRouter.get("/pdf/{pdf_id}")   #  use a path parameter
-async def get_pdf(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
+@bookFollowUpRouter.get("/pdf/{book_no}", response_model=List[PDFResponse])
+async def get_pdfs_by_book_no(book_no: str, db: AsyncSession = Depends(get_async_db)):
     """
-    Retrieve a PDF file by its ID from PDFTable.
+    Retrieve metadata for all PDF files associated with a bookNo from PDFTable, including the username of the user who inserted the PDF.
+    Returns a list of PDF details (id, pdf path, bookNo, currentDate, username).
+    """
+    print(f"Fetching PDFs for bookNo: {book_no}")
+    try:
+        query = (
+            select(
+                PDFTable.id,
+                PDFTable.pdf,
+                PDFTable.bookNo,
+                PDFTable.currentDate,
+                Users.username
+            )
+            .outerjoin(Users, PDFTable.userID == Users.id)
+            .filter(PDFTable.bookNo == book_no)
+        )
+        result = await db.execute(query)
+        pdf_records = result.fetchall()
+        
+        if not pdf_records:
+            print(f"No PDFs found for bookNo: {book_no}")
+            raise HTTPException(status_code=404, detail=f"No PDFs found for bookNo: {book_no}")
+        
+        pdfs = [
+            {
+                "id": record.id,
+                "pdf": record.pdf,
+                "bookNo": record.bookNo,
+                "currentDate": record.currentDate.strftime('%Y-%m-%d') if record.currentDate else None,
+                "username": record.username
+            }
+            for record in pdf_records
+        ]
+        
+        print(f"Found {len(pdfs)} PDFs for bookNo: {book_no}")
+        return pdfs
+    except Exception as e:
+        print(f"Error fetching PDFs for bookNo {book_no}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+   
+
+
+@bookFollowUpRouter.get("/pdf/file/{pdf_id}")
+async def get_pdf_file(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
+    """
+    Retrieve a single PDF file by its ID from PDFTable.
     Returns the PDF file if found and accessible.
     """
-    print(f"Fetching PDF with id: {pdf_id}")
+    print(f"Fetching PDF file with id: {pdf_id}")
     try:
-        query = select(PDFTable.pdf).filter(PDFTable.id == pdf_id)
+        query = select(
+            PDFTable.pdf,
+            PDFTable.bookNo,
+            PDFTable.userID
+        ).filter(PDFTable.id == pdf_id)
         result = await db.execute(query)
-        pdf_path = result.scalar()
+        pdf_record = result.first()
         
-        print(f"Queried PDF path: {pdf_path}")
-        
-        if not pdf_path:
+        if not pdf_record:
             print(f"No PDF found for id: {pdf_id}")
             raise HTTPException(status_code=404, detail="PDF record not found in database")
+        
+        pdf_path, book_no, user_id = pdf_record
+        print(f"Queried PDF path: {pdf_path}, bookNo: {book_no}, userID: {user_id}")
         
         if not os.path.exists(pdf_path):
             print(f"PDF file does not exist at: {pdf_path}")
             raise HTTPException(status_code=404, detail="PDF file not found on server")
         
-        print(f"Serving PDF file: {pdf_path}")
+        print(f"Serving PDF file: {pdf_path} for bookNo: {book_no}, userID: {user_id}")
         return FileResponse(pdf_path, media_type="application/pdf")
     except Exception as e:
-        print(f"Error fetching PDF: {str(e)}")
+        print(f"Error fetching PDF file with id {pdf_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-

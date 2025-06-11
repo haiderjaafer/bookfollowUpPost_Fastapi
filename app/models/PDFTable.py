@@ -30,10 +30,12 @@ class PDFCreate(BaseModel):
     userID: Optional[int]
     currentDate: Optional[date]
 
-
-class PDFResponse(PDFCreate):
+class PDFResponse(BaseModel):
     id: int
-    currentDate: date
+    bookNo: Optional[str]
+    pdf: Optional[str]
+    currentDate: Optional[str]  # Stringified date
+    username: Optional[str]  # Added username from users table
 
     class Config:
         from_attributes = True
