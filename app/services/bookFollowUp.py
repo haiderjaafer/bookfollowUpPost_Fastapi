@@ -1,10 +1,11 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from app.models.PDFTable import PDFTable
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate
 from sqlalchemy import select,func
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 
 class BookFollowUpService:
@@ -63,7 +64,6 @@ class BookFollowUpService:
 
   
 
-
     @staticmethod
     async def getAllorderNo(
         request: Request,
@@ -75,107 +75,121 @@ class BookFollowUpService:
         bookType: Optional[str] = None,
         directoryName: Optional[str] = None,
         incomingNo: Optional[str] = None,
-        
-    ):
-        # Optional filters
-        filters = []
-
-        # Remove empty query parameter logic or make it optional
-        # Commenting out to allow empty strings as "no filter"
+    ) -> Dict[str, Any]:
         """
-        query_params = request.query_params
-        for param in ["bookType", "directoryName", "incomingNo"]:
-            if param in query_params and not query_params[param].strip():
-                return {
-                    "data": [],
-                    "total": 0,
-                    "page": page,
-                    "limit": limit,
-                    "totalPages": 0
-                }
+        Retrieve all BookFollowUpTable records with pagination, optional filters, and associated PDFs.
+        Returns data for DynamicTable with pdfFiles for each record.
         """
+        try:
+            # Optional filters
+            filters = []
+            if bookNo:
+                filters.append(BookFollowUpTable.bookNo == bookNo.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if directoryName:
+                filters.append(BookFollowUpTable.directoryName == directoryName.strip())
+            if incomingNo:
+                filters.append(BookFollowUpTable.incomingNo == incomingNo.strip())
 
-        # Add filters if provided
-        if bookNo:
-            filters.append(BookFollowUpTable.bookNo == bookNo.strip())
-        if bookStatus:
-            filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
-        if bookType:
-            filters.append(BookFollowUpTable.bookType == bookType.strip())
-        if directoryName:
-            filters.append(BookFollowUpTable.directoryName == directoryName.strip())
-        if incomingNo:
-            filters.append(BookFollowUpTable.incomingNo == incomingNo.strip())
-
-        # Step 1: Count distinct bookNo
-        count_stmt = select(func.count()).select_from(
-            select(BookFollowUpTable.bookNo)
-            .distinct()
-            .filter(*filters)
-            .subquery()
-        )
-        count_result = await db.execute(count_stmt)
-        total = count_result.scalar()
-        print(f"Total: {total}, Limit: {limit}, TotalPages: {(total + limit - 1) // limit}")  # Debug
-
-        # Step 2: Pagination offset
-        offset = (page - 1) * limit
-
-        # Step 3: Select paginated records
-        stmt = (
-            select(
-                BookFollowUpTable.id,
-                BookFollowUpTable.bookType,
-                BookFollowUpTable.bookNo,
-                BookFollowUpTable.bookDate,
-                BookFollowUpTable.directoryName,
-                BookFollowUpTable.incomingNo,
-                BookFollowUpTable.incomingDate,
-                BookFollowUpTable.subject,
-                BookFollowUpTable.destination,
-                BookFollowUpTable.bookAction,
-                BookFollowUpTable.bookStatus,
-                BookFollowUpTable.notes,
-                BookFollowUpTable.currentDate,
-                BookFollowUpTable.userID,
+            # Step 1: Count distinct bookNo
+            count_stmt = select(func.count()).select_from(
+                select(BookFollowUpTable.bookNo)
+                .distinct()
+                .filter(*filters)
+                .subquery()
             )
-            .filter(*filters)
-            .distinct(BookFollowUpTable.bookNo)
-            .order_by(BookFollowUpTable.bookNo)
-            .offset(offset)
-            .limit(limit)
-        )
+            count_result = await db.execute(count_stmt)
+            total = count_result.scalar() or 0
+            print(f"Total records: {total}, Page: {page}, Limit: {limit}")  # Debug
 
-        result = await db.execute(stmt)
-        rows = result.all()
+            # Step 2: Pagination offset
+            offset = (page - 1) * limit
 
-        # Step 4: Format data and normalize bookStatus
-        data = [
-            {
-                "id": row.id,
-                "bookType": row.bookType,
-                "bookNo": row.bookNo,
-                "bookDate": row.bookDate,
-                "directoryName": row.directoryName,
-                "incomingNo": row.incomingNo,
-                "incomingDate": row.incomingDate,
-                "subject": row.subject,
-                "destination": row.destination,
-                "bookAction": row.bookAction,
-                "bookStatus": row.bookStatus.strip().lower() if row.bookStatus else None,  # Normalize
-                "notes": row.notes,
-                "currentDate": row.currentDate,
-                "userID": row.userID,
+            # Step 3: Select paginated BookFollowUpTable records
+            book_stmt = (
+                select(
+                    BookFollowUpTable.id,
+                    BookFollowUpTable.bookType,
+                    BookFollowUpTable.bookNo,
+                    BookFollowUpTable.bookDate,
+                    BookFollowUpTable.directoryName,
+                    BookFollowUpTable.incomingNo,
+                    BookFollowUpTable.incomingDate,
+                    BookFollowUpTable.subject,
+                    BookFollowUpTable.destination,
+                    BookFollowUpTable.bookAction,
+                    BookFollowUpTable.bookStatus,
+                    BookFollowUpTable.notes,
+                    BookFollowUpTable.currentDate,
+                    BookFollowUpTable.userID,
+                )
+                .filter(*filters)
+                .distinct(BookFollowUpTable.bookNo)
+                .order_by(BookFollowUpTable.bookNo)
+                .offset(offset)
+                .limit(limit)
+            )
+            book_result = await db.execute(book_stmt)
+            book_rows = book_result.fetchall()
+
+            # Step 4: Fetch PDFs for all bookNos in the current page
+            book_nos = [row.bookNo for row in book_rows]
+            pdf_stmt = select(
+                PDFTable.id,
+                PDFTable.bookNo,
+                PDFTable.pdf,
+                PDFTable.currentDate
+            ).filter(PDFTable.bookNo.in_(book_nos))
+            pdf_result = await db.execute(pdf_stmt)
+            pdf_rows = pdf_result.fetchall()
+
+            # Step 5: Group PDFs by bookNo
+            pdf_map = {}
+            for pdf in pdf_rows:
+                if pdf.bookNo not in pdf_map:
+                    pdf_map[pdf.bookNo] = []
+                pdf_map[pdf.bookNo].append({
+                    "id": pdf.id,
+                    "pdf": pdf.pdf,
+                    "currentDate": pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None
+                })
+
+            # Step 6: Format data
+            data = [
+                {
+                    "id": row.id,
+                    "bookType": row.bookType,
+                    "bookNo": row.bookNo,
+                    "bookDate": row.bookDate.strftime('%Y-%m-%d') if row.bookDate else None,
+                    "directoryName": row.directoryName,
+                    "incomingNo": row.incomingNo,
+                    "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
+                    "subject": row.subject,
+                    "destination": row.destination,
+                    "bookAction": row.bookAction,
+                    "bookStatus": row.bookStatus.strip().lower() if row.bookStatus else None,
+                    "notes": row.notes,
+                    "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
+                    "userID": row.userID,
+                    "pdfFiles": pdf_map.get(row.bookNo, [])  # Add PDFs for this bookNo
+                }
+                for row in book_rows
+            ]
+            print(f"Fetched {len(data)} records with PDFs")  # Debug
+
+            # Step 7: Response
+            return {
+                "data": data,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "totalPages": (total + limit - 1) // limit
             }
-            for row in rows
-        ]
-        print("BookStatus values:", [row["bookStatus"] for row in data])  # Debug
+        except Exception as e:
+            print(f"Error fetching BookFollowUp records: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-        # Step 5: Response
-        return {
-            "data": data,
-            "total": total,
-            "page": page,
-            "limit": limit,
-            "totalPages": (total + limit - 1) // limit
-        }
+    

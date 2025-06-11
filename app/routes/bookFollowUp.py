@@ -10,14 +10,19 @@ from app.services.pdf_service import PDFService
 from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving the uploaded file
 import os
 from app.database.config import settings
-from app.models.PDFTable import PDFCreate
+from app.models.PDFTable import PDFCreate, PDFTable
 from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, PaginatedOrderOut
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 
+from fastapi.responses import FileResponse
+import os
 
 # ✅ Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
+
+
+
 
 # ✅ POST endpoint to add a book and upload a related PDF file
 @bookFollowUpRouter.post("")
@@ -167,28 +172,20 @@ async def get_all_directory_names(
 
 
 
-@bookFollowUpRouter.get("/getAll", response_model=PaginatedOrderOut)
-async def get_BookFollowUp(
+@bookFollowUpRouter.get("/getAll", response_model=Dict[str, Any])
+async def get_all_orders(
     request: Request,
-    db: AsyncSession = Depends(get_async_db),
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
-    bookNo : Optional[str] = Query(None),
-    bookStatus: Optional[str] = Query(None, enum=["منجز", "قيد الانجاز","مداولة"]),
+    bookNo: Optional[str] = Query(None),
+    bookStatus: Optional[str] = Query(None),
     bookType: Optional[str] = Query(None),
     directoryName: Optional[str] = Query(None),
-    incomingNo: Optional[str] = Query(None)
-):
+    incomingNo: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db)
+) -> Dict[str, Any]:
     return await BookFollowUpService.getAllorderNo(
-        request=request,
-        db=db,
-        page=page,
-        limit=limit,
-        bookNo= bookNo,
-        bookStatus=bookStatus,
-        bookType=bookType,
-        directoryName=directoryName,
-        incomingNo=incomingNo
+        request, db, page, limit, bookNo, bookStatus, bookType, directoryName, incomingNo
     )
 
 
@@ -351,3 +348,36 @@ async def get_late_books(
     except Exception as e:
         print(f"Error fetching late books: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+
+
+
+
+@bookFollowUpRouter.get("/pdf/{pdf_id}")   #  use a path parameter
+async def get_pdf(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
+    """
+    Retrieve a PDF file by its ID from PDFTable.
+    Returns the PDF file if found and accessible.
+    """
+    print(f"Fetching PDF with id: {pdf_id}")
+    try:
+        query = select(PDFTable.pdf).filter(PDFTable.id == pdf_id)
+        result = await db.execute(query)
+        pdf_path = result.scalar()
+        
+        print(f"Queried PDF path: {pdf_path}")
+        
+        if not pdf_path:
+            print(f"No PDF found for id: {pdf_id}")
+            raise HTTPException(status_code=404, detail="PDF record not found in database")
+        
+        if not os.path.exists(pdf_path):
+            print(f"PDF file does not exist at: {pdf_path}")
+            raise HTTPException(status_code=404, detail="PDF file not found on server")
+        
+        print(f"Serving PDF file: {pdf_path}")
+        return FileResponse(pdf_path, media_type="application/pdf")
+    except Exception as e:
+        print(f"Error fetching PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
