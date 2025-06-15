@@ -12,7 +12,7 @@ from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
-from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, PaginatedOrderOut
+from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, PaginatedOrderOut
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 from app.services.lateBooks import LateBookFollowUpService
@@ -20,13 +20,23 @@ from app.services.lateBooks import LateBookFollowUpService
 from fastapi.responses import FileResponse
 import os
 
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
+if not logger.handlers:  # Avoid duplicate handlers
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
 # ✅ Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
 
 
 
 
-# ✅ POST endpoint to add a book and upload a related PDF file
+#  POST endpoint to add a book and upload a related PDF file
 @bookFollowUpRouter.post("")
 async def add_book_with_pdf(
     # ✅ Receive form data fields
@@ -297,6 +307,7 @@ async def get_pdfs_by_book_no(book_no: str, db: AsyncSession = Depends(get_async
 
 @bookFollowUpRouter.get("/pdf/file/{pdf_id}")
 async def get_pdf_file(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
+
     """
     Retrieve a single PDF file by its ID from PDFTable.
     Returns the PDF file if found and accessible.
@@ -326,4 +337,109 @@ async def get_pdf_file(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
         return FileResponse(pdf_path, media_type="application/pdf")
     except Exception as e:
         print(f"Error fetching PDF file with id {pdf_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+@bookFollowUpRouter.patch("/{id}", response_model=Dict[str, Any])
+async def update_book_with_pdf(
+    id: int,
+    bookNo: Optional[str] = Form(None),
+    bookDate: Optional[str] = Form(None),
+    bookType: Optional[str] = Form(None),
+    directoryName: Optional[str] = Form(None),
+    incomingNo: Optional[str] = Form(None),
+    incomingDate: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    destination: Optional[str] = Form(None),
+    bookAction: Optional[str] = Form(None),
+    bookStatus: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    userID: Optional[str] = Form(None),
+    file: Optional[UploadFile] = Form(None),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Update a book record by ID with provided fields and optionally add a new PDF.
+    Args:
+        id: Path parameter for the book ID.
+        bookNo, bookDate, ...: Optional form fields to update.
+        userID: Optional user ID for book and PDF.
+        file: Optional PDF file to add.
+        db: Async SQLAlchemy session.
+    Returns:
+        JSON response with success message and updated book ID.
+    Raises:
+        HTTPException: For validation errors, missing book, or server errors.
+    """
+    try:
+        # Validate at least one field or file is provided
+        form_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
+                       incomingDate, subject, destination, bookAction, bookStatus,
+                       notes, userID, file]
+        if all(v is None for v in form_fields):
+            raise HTTPException(status_code=400, detail="At least one field or file must be provided")
+
+        # Create book data model
+        book_data = BookFollowUpCreate(
+            bookNo=bookNo,
+            bookDate=bookDate,
+            bookType=bookType,
+            directoryName=directoryName,
+            incomingNo=incomingNo,
+            incomingDate=incomingDate,
+            subject=subject,
+            destination=destination,
+            bookAction=bookAction,
+            bookStatus=bookStatus,
+            notes=notes,
+            userID=int(userID) if userID else None
+        )
+
+        # Call service method
+        updated_book_id = await BookFollowUpService.update_book(
+            db,
+            id,
+            book_data,
+            file,
+            int(userID) if userID else None
+        )
+
+        return {
+            "message": "Book updated successfully",
+            "bookID": updated_book_id
+        }
+
+    except ValueError as e:
+        logger.error(f"Invalid input for ID {id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in update_book_with_pdf for ID {id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+
+@bookFollowUpRouter.get("/getBookFollowUpByBookID/{id}", response_model=BookFollowUpWithPDFResponseForUpdateByBookID)
+async def get_book_with_pdfs(
+    id: int,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Fetch a book by ID with all fields, associated PDFs, PDF count, and username.
+    Args:
+        id: Book ID to fetch.
+        db: Async SQLAlchemy session.
+    Returns:
+        BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and username.
+    Raises:
+        HTTPException: For missing book or server errors.
+    """
+    try:
+        book_data = await BookFollowUpService.get_book_with_pdfs(db, id)
+        return book_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching book ID {id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")

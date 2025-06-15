@@ -2,9 +2,11 @@ from sqlalchemy import Column, Integer, String, Date,Unicode
 from app.database.database import Base
 
 
-from pydantic import BaseModel
-from datetime import date
+from pydantic import BaseModel, field_validator
+from datetime import date, datetime
 from typing import List, Optional
+
+from app.models.PDFTable import PDFResponse
 
 
 class BookFollowUpTable(Base):
@@ -31,20 +33,34 @@ class BookFollowUpTable(Base):
 
 
 class BookFollowUpCreate(BaseModel):
-    bookType: Optional[str]= None
-    bookNo: Optional[str]= None
-    bookDate: Optional[date]= None
-    directoryName: Optional[str]= None
-    incomingNo: Optional[str]= None
-    incomingDate: Optional[date]= None
-    subject: Optional[str]= None
-    destination: Optional[str]= None
-    bookAction: Optional[str]= None
-    bookStatus: Optional[str]= None
-    notes: Optional[str]= None
-    currentDate: Optional[date]= None
-    userID: Optional[int]= None
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
 
+    # @field_validator('bookDate', 'incomingDate', 'currentDate')
+    # def validate_date(cls, value):
+    #     if value is None:
+    #         return None
+    #     if isinstance(value, str):
+    #         try:
+    #             datetime.strptime(value, '%Y-%m-%d')
+    #             return value
+    #         except ValueError:
+    #             raise ValueError(f"Invalid date format for {value}; expected YYYY-MM-DD")
+    #     raise ValueError(f"Invalid date type for {value}; expected string")
+
+    class Config:
+        from_attributes = True
 
 class BookFollowUpResponse(BaseModel):
     id: int
@@ -59,7 +75,7 @@ class BookFollowUpResponse(BaseModel):
     bookAction: Optional[str]= None
     bookStatus: Optional[str]= None
     notes: Optional[str]= None
-    currentDate: Optional[date]= None
+    currentDate: Optional[str]= None
     userID: Optional[int]= None
     countOfLateBooks: Optional[int]= None 
 
@@ -74,3 +90,41 @@ class PaginatedOrderOut(BaseModel):
     page: int
     limit: int
     totalPages: int
+
+
+
+class BookFollowUpWithPDFResponseForUpdateByBookID(BaseModel):
+    id: int
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
+    username: Optional[str] = None
+    countOfPDFs: Optional[int] = None
+    pdfFiles: List[PDFResponse] = []
+
+    @field_validator('bookDate', 'incomingDate', 'currentDate')
+    def validate_date(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                datetime.strptime(value, '%Y-%m-%d')
+                return value
+            except ValueError:
+                raise ValueError(f"Invalid date format for {value}; expected YYYY-MM-DD")
+        elif isinstance(value, date):
+            return value.strftime('%Y-%m-%d')
+        raise ValueError(f"Invalid date type for {value}; expected string or date")
+
+    class Config:
+        from_attributes = True
