@@ -264,7 +264,7 @@ class BookFollowUpService:
                 if value is not None:  # Skip None values
                     setattr(book, key, value)
             # Set currentDate as string
-            book.currentDate = datetime.now().date().strftime('%Y-%m-%d')
+            book.currentDate = datetime.now().date().strftime('%Y-%m-%d')   # here old data(Excel) of currentDate is empty so here will updated with datetime.now() #### check todo
 
             # Handle PDF upload if provided
             if file and user_id:
