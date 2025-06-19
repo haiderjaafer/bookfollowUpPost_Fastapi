@@ -443,3 +443,14 @@ async def get_book_with_pdfs(
     except Exception as e:
         logger.error(f"Error fetching book ID {id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+
+@bookFollowUpRouter.get("/report", response_model=List[BookFollowUpResponse])
+async def get_filtered_report(
+    bookType: Optional[str] = Query(None),
+    bookStatus: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db)
+):
+    return await BookFollowUpService.reportBookFollowUp(db, bookType, bookStatus)

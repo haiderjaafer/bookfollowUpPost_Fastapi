@@ -1,6 +1,6 @@
 from datetime import date, datetime
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.helper.save_pdf import save_pdf_to_server
@@ -391,3 +391,78 @@ class BookFollowUpService:
         except Exception as e:
             logger.error(f"Error fetching book ID {id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        
+
+
+    @staticmethod
+    async def reportBookFollowUp(
+        db: AsyncSession,
+        bookType: Optional[str] = None,
+        bookStatus: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns a simple filtered list of bookFollowUp records 
+        based on bookType and bookStatus only.
+        No pagination. No grouping.
+        """
+        try:
+            # Step 1: Build filters if values are provided
+            filters = []
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+
+            # Step 2: Fetch all matching records with optional user info
+            stmt = (
+                select(
+                    BookFollowUpTable.id,
+                    BookFollowUpTable.bookType,
+                    BookFollowUpTable.bookNo,
+                    BookFollowUpTable.bookDate,
+                    BookFollowUpTable.directoryName,
+                    BookFollowUpTable.incomingNo,
+                    BookFollowUpTable.incomingDate,
+                    BookFollowUpTable.subject,
+                    BookFollowUpTable.destination,
+                    BookFollowUpTable.bookAction,
+                    BookFollowUpTable.bookStatus,
+                    BookFollowUpTable.notes,
+                    BookFollowUpTable.currentDate,
+                    BookFollowUpTable.userID,
+                    Users.username
+                )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .filter(*filters)
+                .order_by(BookFollowUpTable.bookNo)
+            )
+
+            result = await db.execute(stmt)
+            rows = result.fetchall()
+
+            # Step 3: Return the raw list of dictionaries
+            return [
+                {
+                    "id": row.id,
+                    "bookType": row.bookType,
+                    "bookNo": row.bookNo,
+                    "bookDate": row.bookDate.strftime('%Y-%m-%d') if row.bookDate else None,
+                    "directoryName": row.directoryName,
+                    "incomingNo": row.incomingNo,
+                    "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
+                    "subject": row.subject,
+                    "destination": row.destination,
+                    "bookAction": row.bookAction,
+                    "bookStatus": row.bookStatus,
+                    "notes": row.notes,
+                    "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
+                    "userID": row.userID,
+                    "username": row.username,
+                }
+                for row in rows
+            ]
+
+        except Exception as e:
+            print(f"Error in reportBookFollowUp: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered report.")
+        
