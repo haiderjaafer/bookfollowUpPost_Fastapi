@@ -68,10 +68,13 @@ async def add_book_with_pdf(
         bookAction=bookAction,
         bookStatus=bookStatus,
         notes=notes,
-        currentDate=datetime.now().date(),
+        currentDate=datetime.today().strftime('%Y-%m-%d'), # strftime is method in Python is used to format datetime objects into human-readable strings. The name "strftime" stands for "string format time." It allows for the customization of date and time representations by specifying a format string that dictates how the information should be presented in the output
         userID=userID
     )
+    
     book_id = await BookFollowUpService.insert_book(db, book_data)
+
+    # print(datetime.now().date())
 
     # ✅ Count how many PDFs are already associated with this book
     count = await PDFService.get_pdf_count(db, book_id)
