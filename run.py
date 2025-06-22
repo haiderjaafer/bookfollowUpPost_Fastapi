@@ -55,3 +55,6 @@ if __name__ == "__main__":
 
     # install on another machine
     #   pip install -r requirements.txt
+
+
+    #pip show passlib bcrypt  

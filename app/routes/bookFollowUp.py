@@ -3,12 +3,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
 import pydantic
 from sqlalchemy import select,extract,func
-from sqlalchemy.ext.asyncio import AsyncSession  # ✅ Use AsyncSession instead of sync Session
-from app.database.database import get_async_db  # ✅ Import async DB dependency
+from sqlalchemy.ext.asyncio import AsyncSession  #  Use AsyncSession instead of sync Session
+from app.database.database import get_async_db  #  Import async DB dependency
 from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
-from app.helper.save_pdf import save_pdf_to_server  # ✅ Responsible for saving the uploaded file
+from app.helper.save_pdf import save_pdf_to_server  #  Responsible for saving the uploaded file
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
@@ -30,7 +30,7 @@ if not logger.handlers:  # Avoid duplicate handlers
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-# ✅ Create router with a prefix and tag for grouping endpoints
+#  Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
 
 
@@ -39,7 +39,7 @@ bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"]
 #  POST endpoint to add a book and upload a related PDF file
 @bookFollowUpRouter.post("")
 async def add_book_with_pdf(
-    # ✅ Receive form data fields
+    #  Receive form data fields
     bookNo: str = Form(...),
     bookDate: str = Form(...),
     bookType: str = Form(...),
@@ -52,10 +52,10 @@ async def add_book_with_pdf(
     bookStatus: str = Form(...),
     notes: str = Form(...),
     userID: str = Form(...),
-    file: UploadFile = Form(...),  # ✅ File is sent in multipart form
-    db: AsyncSession = Depends(get_async_db)  # ✅ Use Async DB session
+    file: UploadFile = Form(...),  #  File is sent in multipart form
+    db: AsyncSession = Depends(get_async_db)  #  Use Async DB session
 ):
-    # ✅ Insert book record into DB using BookFollowUpService
+    #  Insert book record into DB using BookFollowUpService
     book_data = BookFollowUpCreate(
         bookNo=bookNo,
         bookDate=bookDate,
@@ -76,25 +76,25 @@ async def add_book_with_pdf(
 
     # print(datetime.now().date())
 
-    # ✅ Count how many PDFs are already associated with this book
+    #  Count how many PDFs are already associated with this book
     count = await PDFService.get_pdf_count(db, book_id)
 
-    # ✅ Save uploaded file to the destination path and return the new path
+    #  Save uploaded file to the destination path and return the new path
     upload_dir = settings.PDF_UPLOAD_PATH
     pdf_path = save_pdf_to_server(file.file, bookNo, bookDate, count, upload_dir)
 
-    # ✅ Create a new PDF record to store in the PDFTable
+    #  Create a new PDF record to store in the PDFTable
     pdf_data = PDFCreate(
         bookID=book_id,
         bookNo=bookNo,
         countPdf=count,
         pdf=pdf_path,
-        userID=int(userID),  # ✅ Ensure this is an integer
-        currentDate=datetime.now().date()  # ✅ Convert datetime to date only
+        userID=int(userID),  #  Ensure this is an integer
+        currentDate=datetime.now().date()  #  Convert datetime to date only
     )
     await PDFService.insert_pdf(db, pdf_data)
 
-    # ✅ Attempt to delete the original uploaded file from scanner folder
+    #  Attempt to delete the original uploaded file from scanner folder
     try:
         # This assumes the file has been saved temporarily at the path below
         scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
@@ -102,7 +102,7 @@ async def add_book_with_pdf(
     except Exception as e:
         print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {e}")
 
-    # ✅ Return success response with inserted book ID
+    #  Return success response with inserted book ID
     return {"message": "Book and PDF saved successfully", "bookID": book_id}
 
 

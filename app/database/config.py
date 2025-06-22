@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import field_validator, Field
+
 from pathlib import Path
 import urllib.parse
 
@@ -14,10 +15,23 @@ class Settings(BaseSettings):
     PDF_UPLOAD_PATH: Path  # Use Path type instead of str
     PDF_SOURCE_PATH: Path  # Use Path type instead of str
     MODE: str
+    jwt_secret: str
+
+    # database_server: str = Field(..., env="DATABASE_SERVER")
+    # database_name: str = Field(..., env="DATABASE_NAME")
+    # database_user: str = Field(..., env="DATABASE_USER")
+    # database_password: str = Field(..., env="DATABASE_PASSWORD")
+    # database_driver: str = Field("ODBC Driver 17 for SQL Server", env="DATABASE_DRIVER")
+    # pdf_upload_path: Path = Field(..., env="PDF_UPLOAD_PATH")
+    # pdf_source_path: Path = Field(..., env="PDF_SOURCE_PATH")
+    # mode: str = Field("development", env="MODE")
+    # jwt_secret: str = Field(..., env="JWT_SECRET")
+    # node_env: str = Field("development", env="NODE_ENV") 
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"  # Ensure proper encoding
+        case_sensitive = False  # Allow JWT_SECRET or jwt_secret
 
     # Validator to ensure paths exist and are directories
     @field_validator("PDF_UPLOAD_PATH", "PDF_SOURCE_PATH")

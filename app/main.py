@@ -15,6 +15,7 @@ from app.database.config import settings
 
 # ✅ Import your route modules
 from app.routes.bookFollowUp import bookFollowUpRouter
+from app.routes.authentication import router
 
 
 @asynccontextmanager
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
 
     # ✅ Register routers
     app.include_router(bookFollowUpRouter)
+    app.include_router(router)
 
     return app
 

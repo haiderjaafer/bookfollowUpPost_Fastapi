@@ -9,7 +9,7 @@ class Users(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), nullable=True)
-    password = Column(String(50), nullable=True)
+    password = Column(String(255), nullable=True)
     permission = Column(String(10), nullable=True)
 
 class UserCreate(BaseModel):
