@@ -73,7 +73,7 @@ class AuthenticationService:
             "id": user_id,
             "username": username,
             "isAdmin": permission == "admin" if permission else False,
-            "exp": datetime.utcnow() + timedelta(days=JWT_EXPIRE_DAYS)
+            "exp": datetime.now() + timedelta(days=JWT_EXPIRE_DAYS)  # will add one month expiration from datetime.now()
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     

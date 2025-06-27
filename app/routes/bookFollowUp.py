@@ -449,11 +449,29 @@ async def get_book_with_pdfs(
     
 
 
-
 @bookFollowUpRouter.get("/report", response_model=List[BookFollowUpResponse])
 async def get_filtered_report(
-    bookType: Optional[str] = Query(None),
-    bookStatus: Optional[str] = Query(None),
+    bookType: Optional[str] = Query(None, description="Filter by book type"),
+    bookStatus: Optional[str] = Query(None, description="Filter by book status"),
+    check: Optional[bool] = Query(False, description="Enable date range filtering (True) or NULL currentDate (False)"),
+    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for check=True"),
+    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for check=True"),
     db: AsyncSession = Depends(get_async_db)
 ):
-    return await BookFollowUpService.reportBookFollowUp(db, bookType, bookStatus)
+    """
+    Get filtered book follow-up report. If check=True, filter by date range.
+    If check=False, filter by currentDate IS NULL.
+
+    Args:
+        bookType: Filter by book type
+        bookStatus: Filter by book status
+        check: Enable date range filtering (True) or NULL currentDate (False)
+        startDate: Start date for filtering (YYYY-MM-DD)
+        endDate: End date for filtering (YYYY-MM-DD)
+        db: AsyncSession dependency
+    
+    Returns:
+        List of book follow-up records
+    """
+    logger.debug(f"Received report request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}")
+    return await BookFollowUpService.reportBookFollowUp(db, bookType, bookStatus, check, startDate, endDate)

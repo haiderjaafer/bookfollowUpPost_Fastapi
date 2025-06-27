@@ -33,3 +33,8 @@ You would then need to await create_app() wherever you call it, which complicate
 FastAPI expects the app instance to be available synchronously when passed to uvicorn.run() or other ASGI servers.
 
 So generally, keep create_app() synchronous.
+
+
+
+
+

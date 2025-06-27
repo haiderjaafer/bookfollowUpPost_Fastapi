@@ -1,0 +1,8 @@
+AttributeError: module 'bcrypt' has no attribute '__about__'
+In the .venv\Lib\site-packages\passlib\handlers\bcrypt.py file change the below line
+
+version = _bcrypt.__about__.__version__
+to
+
+version = _bcrypt.__version__
+

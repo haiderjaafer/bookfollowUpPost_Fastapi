@@ -1,19 +1,19 @@
-# ✅ Import FastAPI core
+#  Import FastAPI core
 from fastapi import FastAPI
 
-# ✅ CORS middleware to allow frontend (like React on localhost:3000) to access the API
+#  CORS middleware to allow frontend (like React on localhost:3000) to access the API
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Context manager to define startup/shutdown behavior
+#  Context manager to define startup/shutdown behavior
 from contextlib import asynccontextmanager
 
-# ✅ SQLAlchemy engine and base (used to create tables)
+#  SQLAlchemy engine and base (used to create tables)
 from app.database.database import engine, Base
 
-# ✅ Custom app settings from .env or config file
+#  Custom app settings from .env or config file
 from app.database.config import settings
 
-# ✅ Import your route modules
+#  Import your route modules
 from app.routes.bookFollowUp import bookFollowUpRouter
 from app.routes.authentication import router
 
@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     else:
         print("🚀 PRODUCTION mode: skipping table creation.")
 
-    yield  # ✅ Allows the application to continue startup
+    yield  #  Allows the application to continue startup
 
 
 def create_app() -> FastAPI:              #create_app() just defines a factory function returning a FastAPI app.
@@ -39,12 +39,14 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
         lifespan=lifespan                 # Hook startup logic
     )
 
-    # ✅ Enable CORS for frontend (e.g., Next.js or React app on port 3000)
+    #  Enable CORS for frontend (e.g., Next.js or React app on port 3000)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],  #  Update if your frontend is hosted elsewhere
+        allow_origins=["http://127.0.0.1:3000" ],  #  Update if your frontend is hosted elsewhere
         allow_credentials=True,
-        allow_methods=["*"],
+        # allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+
         allow_headers=["*"],
         expose_headers=["*"]
     )

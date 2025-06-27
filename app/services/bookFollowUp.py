@@ -394,26 +394,66 @@ class BookFollowUpService:
         
 
 
+
+    
     @staticmethod
     async def reportBookFollowUp(
         db: AsyncSession,
         bookType: Optional[str] = None,
-        bookStatus: Optional[str] = None
+        bookStatus: Optional[str] = None,
+        check: Optional[bool] = False,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Returns a simple filtered list of bookFollowUp records 
-        based on bookType and bookStatus only.
-        No pagination. No grouping.
+        Returns a filtered list of bookFollowUp records based on bookType, bookStatus,
+        and date filtering on currentDate. If check is True, filter by date range
+        (non-NULL currentDate). If check is False, filter by currentDate IS NULL.
+
+        Args:
+            db: AsyncSession for database access
+            bookType: Optional filter for book type
+            bookStatus: Optional filter for book status
+            check: Boolean to enable/disable date range filtering
+            startDate: Start date for filtering (YYYY-MM-DD) if check is True
+            endDate: End date for filtering (YYYY-MM-DD) if check is True
+
+        Returns:
+            List of dictionaries containing book follow-up records
         """
         try:
-            # Step 1: Build filters if values are provided
+            # Step 1: Build filters
             filters = []
             if bookType:
                 filters.append(BookFollowUpTable.bookType == bookType.strip())
             if bookStatus:
                 filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
 
-            # Step 2: Fetch all matching records with optional user info
+            # Step 2: Add date filter based on check
+            if check:
+                if not startDate or not endDate:
+                    logger.error("startDate and endDate are required when check is True")
+                    raise HTTPException(status_code=400, detail="startDate and endDate are required when check is True")
+                
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        logger.error("startDate cannot be after endDate")
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    # Ensure currentDate is not NULL and within range
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                    logger.debug(f"Applying date range filter: {start_date} to {end_date}")
+                except ValueError as e:
+                    logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            else:
+                # When check=False, filter for currentDate IS NULL
+                filters.append(BookFollowUpTable.currentDate.is_(None))
+                logger.debug("Applying currentDate IS NULL filter")
+
+            # Step 3: Fetch matching records with optional user info
             stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -440,7 +480,7 @@ class BookFollowUpService:
             result = await db.execute(stmt)
             rows = result.fetchall()
 
-            # Step 3: Return the raw list of dictionaries
+            # Step 4: Format response
             return [
                 {
                     "id": row.id,
@@ -462,7 +502,8 @@ class BookFollowUpService:
                 for row in rows
             ]
 
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error in reportBookFollowUp: {str(e)}")
+            logger.error(f"Error in reportBookFollowUp: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered report.")
-        
