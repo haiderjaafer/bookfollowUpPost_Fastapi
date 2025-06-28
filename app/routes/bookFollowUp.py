@@ -186,6 +186,17 @@ async def get_all_directory_names(
     return await BookFollowUpService.searchDirectoryNames(db, search)
 
 
+@bookFollowUpRouter.get("/getSubjects", response_model=list[str])
+async def getSubjects(
+    search: str = Query(default="", description="Partial match for subject"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    return await BookFollowUpService.getSubjects(db, search)
+
+
+
+
+
 
 @bookFollowUpRouter.get("/getAll", response_model=Dict[str, Any])
 async def getByFilterBooksNo(
@@ -196,11 +207,12 @@ async def getByFilterBooksNo(
     bookStatus: Optional[str] = Query(None),
     bookType: Optional[str] = Query(None),
     directoryName: Optional[str] = Query(None),
+    subject: Optional[str] = Query(None),
     incomingNo: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_async_db)
 ) -> Dict[str, Any]:
     return await BookFollowUpService.getAllFilteredBooksNo(
-        request, db, page, limit, bookNo, bookStatus, bookType, directoryName, incomingNo
+        request, db, page, limit, bookNo, bookStatus, bookType, directoryName,subject, incomingNo
     )
 
 

@@ -73,6 +73,20 @@ class BookFollowUpService:
         return result.scalars().all()
     
 
+
+    @staticmethod
+    async def getSubjects(db: AsyncSession, query: str = ""):
+        stmt = (
+            select(BookFollowUpTable.subject)
+            .where(BookFollowUpTable.subject.isnot(None))
+            .where(BookFollowUpTable.subject.ilike(f"%{query}%"))
+            .distinct()
+            .order_by(BookFollowUpTable.subject)
+        )
+        result = await db.execute(stmt)
+        return result.scalars().all()
+    
+
     #http://127.0.0.1:9000/api/bookFollowUp/getAllDirectoryNames?search=مكتب
     #http://127.0.0.1:9000/api/bookFollowUp/getAllIncomingNo
     #http://127.0.0.1:9000/api/bookFollowUp/getAllBooksNo
@@ -95,6 +109,7 @@ class BookFollowUpService:
         bookStatus: Optional[str] = None,
         bookType: Optional[str] = None,
         directoryName: Optional[str] = None,
+        subject: Optional[str] = None,
         incomingNo: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -112,6 +127,8 @@ class BookFollowUpService:
                 filters.append(BookFollowUpTable.bookType == bookType.strip())
             if directoryName:
                 filters.append(BookFollowUpTable.directoryName == directoryName.strip())
+            if subject:
+                filters.append(BookFollowUpTable.subject == subject.strip())    
             if incomingNo:
                 filters.append(BookFollowUpTable.incomingNo == incomingNo.strip())
 
