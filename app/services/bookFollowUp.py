@@ -87,6 +87,19 @@ class BookFollowUpService:
         return result.scalars().all()
     
 
+
+    @staticmethod
+    async def getDestination(db: AsyncSession, query: str = ""):
+        stmt = (
+            select(BookFollowUpTable.destination)
+            .where(BookFollowUpTable.destination.isnot(None))
+            .where(BookFollowUpTable.destination.ilike(f"%{query}%"))
+            .distinct()
+            .order_by(BookFollowUpTable.destination)
+        )
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
     #http://127.0.0.1:9000/api/bookFollowUp/getAllDirectoryNames?search=مكتب
     #http://127.0.0.1:9000/api/bookFollowUp/getAllIncomingNo
     #http://127.0.0.1:9000/api/bookFollowUp/getAllBooksNo

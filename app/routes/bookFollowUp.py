@@ -195,6 +195,15 @@ async def getSubjects(
 
 
 
+@bookFollowUpRouter.get("/getDestination", response_model=list[str])
+async def getSubjects(
+    search: str = Query(default="", description="Partial match for destination"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    return await BookFollowUpService.getDestination(db, search)
+
+
+
 
 
 
