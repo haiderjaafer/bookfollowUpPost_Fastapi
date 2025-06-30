@@ -59,7 +59,7 @@ async def login(
         
         # 🔥 CRITICAL: Cookie settings for browser compatibility
         response.set_cookie(
-            key="app_jwt_token_auth",
+            key="jwt_cookies_auth_token",
             value=token,
             httponly=True,           # Prevent JS access
             secure=os.getenv("NODE_ENV") == "production",            # False for localhost HTTP
@@ -88,25 +88,6 @@ async def login(
 
 
 
-# @router.get("/test-cookie")
-# async def test_cookie(response: Response):
-#     """Test endpoint to verify cookie setting works"""
-#     response.set_cookie(
-#         key="testCookie",
-#         value="test123",
-#         httponly=False,  # Allow JS access for testing
-#         secure=False,
-#         samesite="lax",
-#         max_age=3600,
-#         path="/"
-#     )
-#     return {"message": "Test cookie set"}
-
-
-    
-
-
-
 @router.post("/register")
 async def register(
     user_create: UserCreate,
@@ -128,7 +109,7 @@ async def register(
         
         # Set HTTP-only cookie
         response.set_cookie(
-            key="app_jwt_token",
+            key="jwt_cookies_auth_token",
             value=token,
             httponly=True,
             secure=os.getenv("NODE_ENV") == "production",
@@ -151,7 +132,7 @@ async def logout(response: Response):
     print("logout....")
 
     response.delete_cookie(
-        key="app_jwt_token_auth",    
+        key="jwt_cookies_auth_token",    
         # httponly=True,           
         # secure=False,            
         # samesite="lax",             
@@ -163,28 +144,4 @@ async def logout(response: Response):
 
 
 
-@router.post("/set_cookie")
-async def create_cookie(response: Response, request:LoginRequest,  db: AsyncSession = Depends(get_async_db) ):
-
-    user = await AuthenticationService.verify_user(db, request.username, request.password)
-
-    print(f"user data")
     
-    print(f"{user}")
-                 
-    token = AuthenticationService.generate_jwt(
-            user_id=user.id,
-            username=user.username,
-            permission=user.permission
-        )
-
-    print(f"token ... {token}")  
-        
-    response.set_cookie(
-        key="our_cookie",
-          value=token,
-            httponly=True,
-            secure=False,
-            samesite="lax"
-            )              
-    return {"cookie_setted": True}    
