@@ -537,3 +537,6 @@ class BookFollowUpService:
         except Exception as e:
             logger.error(f"Error in reportBookFollowUp: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered report.")
+        
+
+        

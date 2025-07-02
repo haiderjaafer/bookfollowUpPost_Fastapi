@@ -496,3 +496,36 @@ async def get_filtered_report(
     """
     logger.debug(f"Received report request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}")
     return await BookFollowUpService.reportBookFollowUp(db, bookType, bookStatus, check, startDate, endDate)
+
+
+
+
+# Pydantic model for request body
+class DeletePDFRequest(pydantic.BaseModel):
+    id: int
+    pdf: str  # Matches frontend 'pdf' field
+
+# Existing endpoints omitted
+
+@bookFollowUpRouter.delete("/delete_pdf", response_model=dict)
+async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_async_db)):
+    """
+    Deletes a PDFTable record and its associated file based on ID and pdf path.
+
+    Args:
+        request: JSON body with id and pdf
+        db: Database session
+
+    Returns:
+        dict: {"success": true} if deletion succeeds, {"success": false} otherwise
+    """
+    try:
+        print(request.id)
+        print(request.pdf)
+        success = await PDFService.delete_pdf_record(db, request.id, request.pdf)
+        return {"success": success}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in delete_pdf endpoint: {str(e)}")
+        return {"success": False}
