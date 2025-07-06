@@ -1,4 +1,5 @@
 from datetime import datetime,timedelta, timezone
+import traceback
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
 import pydantic
@@ -284,12 +285,10 @@ async def get_late_books(
     return await LateBookFollowUpService.getLateBooks(db, page, limit)
 
 
+
+
 @bookFollowUpRouter.get("/pdf/{book_no}", response_model=List[PDFResponse])
 async def get_pdfs_by_book_no(book_no: str, db: AsyncSession = Depends(get_async_db)):
-    """
-    Retrieve metadata for all PDF files associated with a bookNo from PDFTable, including the username of the user who inserted the PDF.
-    Returns a list of PDF details (id, pdf path, bookNo, currentDate, username).
-    """
     print(f"Fetching PDFs for bookNo: {book_no}")
     try:
         query = (
@@ -303,12 +302,11 @@ async def get_pdfs_by_book_no(book_no: str, db: AsyncSession = Depends(get_async
             .outerjoin(Users, PDFTable.userID == Users.id)
             .filter(PDFTable.bookNo == book_no)
         )
+        print("Executing query...")
         result = await db.execute(query)
+        print("Query executed, fetching results...")
         pdf_records = result.fetchall()
-        
-        if not pdf_records:
-            print(f"No PDFs found for bookNo: {book_no}")
-            raise HTTPException(status_code=404, detail=f"No PDFs found for bookNo: {book_no}")
+        print(f"Fetched {len(pdf_records)} records")
         
         pdfs = [
             {
@@ -316,17 +314,20 @@ async def get_pdfs_by_book_no(book_no: str, db: AsyncSession = Depends(get_async
                 "pdf": record.pdf,
                 "bookNo": record.bookNo,
                 "currentDate": record.currentDate.strftime('%Y-%m-%d') if record.currentDate else None,
-                "username": record.username
+                "username": record.username if record.username else None
             }
             for record in pdf_records
         ]
         
-        print(f"Found {len(pdfs)} PDFs for bookNo: {book_no}")
-        return pdfs
+        print(f"Returning {len(pdfs)} PDFs for bookNo: {book_no}")
+
+        return pdfs  # Returns [] if no records
+    
     except Exception as e:
         print(f"Error fetching PDFs for bookNo {book_no}: {str(e)}")
+        print("Traceback:", traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-   
+
 
 
 @bookFollowUpRouter.get("/pdf/file/{pdf_id}")
