@@ -63,6 +63,7 @@ class PDFService:
             bool: True if both record and file (if exists) are deleted, False otherwise
         """
         try:
+            print(f" id ...{id}")
             # Step 1: Validate file path to prevent directory traversal
             base_path = settings.PDF_UPLOAD_PATH  # e.g., D:\booksFollowUp\pdfDestination
             if not PDFService.is_safe_path(base_path, pdf_path):
@@ -74,8 +75,16 @@ class PDFService:
             result = await db.execute(stmt)
             pdf_record = result.scalars().first()
 
+           # print(f"pdf_record.bookID... {pdf_record.bookID}")
+
+            #print(f"pdf path... {pdf_path}")
+
+            if not os.path.exists(pdf_path):
+                logger.warning(f"No PDF file system directory: {pdf_path}")   # check for path in file system directory
+                return False
+
             if not pdf_record:
-                logger.warning(f"No PDF record found for ID: {id}")
+                logger.warning(f"No PDF record found for ID: {id}")   # check for record in db
                 return False
 
             # Step 3: Normalize paths for comparison

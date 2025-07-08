@@ -36,11 +36,8 @@ bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"]
 
 
 
-
-#  POST endpoint to add a book and upload a related PDF file
 @bookFollowUpRouter.post("")
 async def add_book_with_pdf(
-    #  Receive form data fields
     bookNo: str = Form(...),
     bookDate: str = Form(...),
     bookType: str = Form(...),
@@ -53,58 +50,70 @@ async def add_book_with_pdf(
     bookStatus: str = Form(...),
     notes: str = Form(...),
     userID: str = Form(...),
-    file: UploadFile = Form(...),  #  File is sent in multipart form
-    db: AsyncSession = Depends(get_async_db)  #  Use Async DB session
+    file: UploadFile = Form(...),
+    db: AsyncSession = Depends(get_async_db)
 ):
-    #  Insert book record into DB using BookFollowUpService
-    book_data = BookFollowUpCreate(
-        bookNo=bookNo,
-        bookDate=bookDate,
-        bookType=bookType,
-        directoryName=directoryName,
-        incomingNo=incomingNo,
-        incomingDate=incomingDate,
-        subject=subject,
-        destination=destination,
-        bookAction=bookAction,
-        bookStatus=bookStatus,
-        notes=notes,
-        currentDate=datetime.today().strftime('%Y-%m-%d'), # strftime is method in Python is used to format datetime objects into human-readable strings. The name "strftime" stands for "string format time." It allows for the customization of date and time representations by specifying a format string that dictates how the information should be presented in the output
-        userID=userID
-    )
-    
-    book_id = await BookFollowUpService.insert_book(db, book_data)
-
-    # print(datetime.now().date())
-
-    #  Count how many PDFs are already associated with this book
-    count = await PDFService.get_pdf_count(db, book_id)
-
-    #  Save uploaded file to the destination path and return the new path
-    upload_dir = settings.PDF_UPLOAD_PATH
-    pdf_path = save_pdf_to_server(file.file, bookNo, bookDate, count, upload_dir)
-
-    #  Create a new PDF record to store in the PDFTable
-    pdf_data = PDFCreate(
-        bookID=book_id,
-        bookNo=bookNo,
-        countPdf=count,
-        pdf=pdf_path,
-        userID=int(userID),  #  Ensure this is an integer
-        currentDate=datetime.now().date()  #  Convert datetime to date only
-    )
-    await PDFService.insert_pdf(db, pdf_data)
-
-    #  Attempt to delete the original uploaded file from scanner folder
     try:
-        # This assumes the file has been saved temporarily at the path below
-        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
-        os.remove(scanner_path)
-    except Exception as e:
-        print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {e}")
+        # Insert book record
+        book_data = BookFollowUpCreate(
+            bookNo=bookNo,
+            bookDate=bookDate,
+            bookType=bookType,
+            directoryName=directoryName,
+            incomingNo=incomingNo,
+            incomingDate=incomingDate,
+            subject=subject,
+            destination=destination,
+            bookAction=bookAction,
+            bookStatus=bookStatus,
+            notes=notes,
+            currentDate=datetime.today().strftime('%Y-%m-%d'),
+            userID=userID
+        )
+        book_id = await BookFollowUpService.insert_book(db, book_data)
+        print(f"Inserted book with ID: {book_id}")
 
-    #  Return success response with inserted book ID
-    return {"message": "Book and PDF saved successfully", "bookID": book_id}
+        # Count PDFs
+        count = await PDFService.get_pdf_count(db, book_id)
+        print(f"PDF count for book {book_id}: {count}")
+
+        # Save uploaded file
+        upload_dir = settings.PDF_UPLOAD_PATH
+        with file.file as f:  # Ensure stream is closed
+            pdf_path = save_pdf_to_server(f, bookNo, bookDate, count, upload_dir)
+        print(f"Saved PDF to: {pdf_path}")
+
+        # Insert PDF record
+        pdf_data = PDFCreate(
+            bookID=book_id,
+            bookNo=bookNo,
+            countPdf=count,
+            pdf=pdf_path,
+            userID=int(userID),
+            currentDate=datetime.now().date().isoformat()
+        )
+        await PDFService.insert_pdf(db, pdf_data)
+        print(f"Inserted PDF record: {pdf_path}")
+
+        # Delete original file
+        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+        print(f"Attempting to delete: {scanner_path}")
+        if os.path.isfile(scanner_path):
+            try:
+                # Ensure file is not open
+                file.file.close()  # Double-check stream closure
+                os.remove(scanner_path)
+                print(f"Successfully deleted: {scanner_path}")
+            except OSError as e:
+                print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {str(e)}")
+                # Continue instead of raising error
+        else:
+            print(f"File not found for deletion: {scanner_path}")
+
+        return {"message": "Book and PDF saved successfully", "bookID": book_id}
+    except Exception as e:
+        print(f"Error in add_book_with_pdf: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 
@@ -521,8 +530,8 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
         dict: {"success": true} if deletion succeeds, {"success": false} otherwise
     """
     try:
-        print(request.id)
-        print(request.pdf)
+       # print(request.id)
+      #  print(request.pdf)
         success = await PDFService.delete_pdf_record(db, request.id, request.pdf)
         return {"success": success}
     except HTTPException:
@@ -530,3 +539,21 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
     except Exception as e:
         logger.error(f"Error in delete_pdf endpoint: {str(e)}")
         return {"success": False}
+    
+
+
+# Specific file path
+FILE_PATH = r"D:\booksFollowUp\pdfScanner\book.pdf"
+
+# Route to serve book.pdf
+@bookFollowUpRouter.get("/files/book")
+async def get_book_pdf():
+    try:
+        # Check if file exists
+        if not os.path.isfile(FILE_PATH):
+            raise HTTPException(status_code=404, detail="File book.pdf not found")
+        
+        # Return file content
+        return FileResponse(FILE_PATH, media_type="application/pdf")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
