@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime,timedelta, timezone
 import traceback
 from typing import Any, Dict, List, Optional
@@ -9,7 +10,7 @@ from app.database.database import get_async_db  #  Import async DB dependency
 from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
-from app.helper.save_pdf import save_pdf_to_server  #  Responsible for saving the uploaded file
+from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server  #  Responsible for saving the uploaded file
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
@@ -54,7 +55,7 @@ async def add_book_with_pdf(
     db: AsyncSession = Depends(get_async_db)
 ):
     try:
-        # Insert book record
+        # Insert book
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
             bookDate=bookDate,
@@ -77,11 +78,14 @@ async def add_book_with_pdf(
         count = await PDFService.get_pdf_count(db, book_id)
         print(f"PDF count for book {book_id}: {count}")
 
-        # Save uploaded file
+        # Save file
         upload_dir = settings.PDF_UPLOAD_PATH
-        with file.file as f:  # Ensure stream is closed
+        with file.file as f:
             pdf_path = save_pdf_to_server(f, bookNo, bookDate, count, upload_dir)
         print(f"Saved PDF to: {pdf_path}")
+
+        # Close upload stream
+        file.file.close()
 
         # Insert PDF record
         pdf_data = PDFCreate(
@@ -95,27 +99,21 @@ async def add_book_with_pdf(
         await PDFService.insert_pdf(db, pdf_data)
         print(f"Inserted PDF record: {pdf_path}")
 
-        # Delete original file
+        # Delete original file (with delay)
         scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
         print(f"Attempting to delete: {scanner_path}")
-        if os.path.isfile(scanner_path):
-            try:
-                # Ensure file is not open
-                file.file.close()  # Double-check stream closure
-                os.remove(scanner_path)
-                print(f"Successfully deleted: {scanner_path}")
-            except OSError as e:
-                print(f"⚠️ Warning: Could not delete original file {scanner_path}. Reason: {str(e)}")
-                # Continue instead of raising error
+        if os.path.isfile(scanner_path):                                          # os.path.isfile(...) to ensure the file exists
+           # delayed_delete(scanner_path, delay_sec=3)
+           asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))   #asyncio.create_task(...) to run async_delayed_delete(...) in the background  and No await, so it doesn’t block the request 
+
         else:
-            print(f"File not found for deletion: {scanner_path}")
+            print(f" File not found for deletion: {scanner_path}")
 
         return {"message": "Book and PDF saved successfully", "bookID": book_id}
+
     except Exception as e:
-        print(f"Error in add_book_with_pdf: {str(e)}")
+        print(f"❌ Error in add_book_with_pdf: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
-
 
 
 @bookFollowUpRouter.post("/add-supplement")
