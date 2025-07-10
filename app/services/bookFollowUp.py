@@ -1,12 +1,13 @@
 from datetime import date, datetime
 import os
 from typing import Any, Dict, List, Optional
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.helper.save_pdf import save_pdf_to_server
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
-from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID
-from sqlalchemy import select,func
+from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, UserBookCount
+from sqlalchemy import select,func,case
 from fastapi import HTTPException, Request, UploadFile
 from app.models.users import Users
 from app.services.pdf_service import PDFService
@@ -537,6 +538,64 @@ class BookFollowUpService:
         except Exception as e:
             logger.error(f"Error in reportBookFollowUp: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered report.")
+
+
+
+
+    @staticmethod
+    async def get_book_type_counts(db: AsyncSession) -> BookTypeCounts:
+        try:
+            query = select(
+                func.count(case((BookFollowUpTable.bookType == 'خارجي', 1))).label('External'),
+                func.count(case((BookFollowUpTable.bookType == 'داخلي', 1))).label('Internal'),
+                func.count(case((BookFollowUpTable.bookType == 'فاكس', 1))).label('Fax')
+            )
+            result = await db.execute(query)
+            row = result.first()
+            return BookTypeCounts(
+                External=row.External or 0,
+                Internal=row.Internal or 0,
+                Fax=row.Fax or 0
+            )
+        except Exception as e:
+            print(f"Error in get_book_type_counts: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered BookTypeCounts")
         
 
-        
+
+    @staticmethod
+    async def get_book_status_counts(db: AsyncSession) -> BookStatusCounts:
+        try:
+            query = select(
+                func.count(case((BookFollowUpTable.bookStatus == 'منجز', 1))).label('Accomplished'),
+                func.count(case((BookFollowUpTable.bookStatus == 'قيد الانجاز', 1))).label('Pending'),
+                func.count(case((BookFollowUpTable.bookStatus == 'مداولة', 1))).label('Deliberation')
+            )
+            result = await db.execute(query)
+            row = result.first()
+            return BookStatusCounts(
+                Accomplished=row.Accomplished or 0,
+                Pending=row.Pending or 0,
+                Deliberation=row.Deliberation or 0
+            )
+        except Exception as e:
+            print(f"Error in get_book_status_counts: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered BookStatusCounts")
+
+
+
+    @staticmethod
+    async def get_user_book_counts(db: AsyncSession) -> List[UserBookCount]:
+        try:
+            query = (
+                select(Users.username, func.count(BookFollowUpTable.id).label('bookCount'))
+                .join(Users, BookFollowUpTable.userID == Users.id)
+                .group_by(Users.username)
+                .order_by(func.count(BookFollowUpTable.id).desc())
+            )
+            result = await db.execute(query)
+            rows = result.fetchall()
+            return [UserBookCount(username=row.username, bookCount=row.bookCount) for row in rows]
+        except Exception as e:
+            print(f"Error in get_user_book_counts: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered UserBookCount.")       

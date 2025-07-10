@@ -132,3 +132,20 @@ class BookFollowUpWithPDFResponseForUpdateByBookID(BaseModel):
         from_attributes = True
 
 
+
+# Response models for type safety
+class BookTypeCounts(BaseModel):
+    External: int
+    Internal: int
+    Fax: int
+
+class BookStatusCounts(BaseModel):
+    Accomplished: int
+    Pending: int
+    Deliberation: int
+
+class UserBookCount(BaseModel):
+    username: str
+    bookCount: int
+
+

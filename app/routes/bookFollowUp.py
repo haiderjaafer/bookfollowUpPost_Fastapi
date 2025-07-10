@@ -14,7 +14,7 @@ from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server  #  Res
 import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
-from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, PaginatedOrderOut
+from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, UserBookCount
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 from app.services.lateBooks import LateBookFollowUpService
@@ -554,4 +554,33 @@ async def get_book_pdf():
         # Return file content
         return FileResponse(FILE_PATH, media_type="application/pdf")
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+@bookFollowUpRouter.get("/counts/book-type", response_model=BookTypeCounts)
+async def get_book_type_counts(db: AsyncSession = Depends(get_async_db)):
+    try:
+        counts = await BookFollowUpService.get_book_type_counts(db)
+        return counts
+    except Exception as e:
+        print(f"Error in get_book_type_counts route: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+@bookFollowUpRouter.get("/counts/book-status", response_model=BookStatusCounts)
+async def get_book_status_counts(db: AsyncSession = Depends(get_async_db)):
+    try:
+        counts = await BookFollowUpService.get_book_status_counts(db)
+        return counts
+    except Exception as e:
+        print(f"Error in get_book_status_counts route: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+@bookFollowUpRouter.get("/counts/user-books", response_model=List[UserBookCount])
+async def get_user_book_counts(db: AsyncSession = Depends(get_async_db)):
+    try:
+        counts = await BookFollowUpService.get_user_book_counts(db)
+        return counts
+    except Exception as e:
+        print(f"Error in get_user_book_counts route: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
