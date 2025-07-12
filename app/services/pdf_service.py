@@ -4,9 +4,11 @@ import os
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func,delete
+from app.helper.save_pdf import async_delayed_delete
 from app.models.PDFTable import PDFTable, PDFCreate
 from pathlib import Path
 from app.database.config import settings
+import asyncio
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -104,7 +106,8 @@ class PDFService:
 
             # Step 5: Delete the file from the filesystem
             if os.path.exists(pdf_path):
-                os.remove(pdf_path)
+                # os.remove(pdf_path)
+                asyncio.create_task(async_delayed_delete(pdf_path, delay_sec=3))
                 logger.debug(f"Deleted PDF file from filesystem: {pdf_path}")
             else:
                 logger.warning(f"PDF file not found on filesystem: {pdf_path}")
@@ -122,16 +125,7 @@ class PDFService:
 
     @staticmethod
     def is_safe_path(base_path: str, path: str) -> bool:
-        """
-        Ensures the file path is within the allowed directory to prevent directory traversal.
-
-        Args:
-            base_path: The base directory (e.g., D:\booksFollowUp\pdfDestination)
-            path: The file path to check
-
-        Returns:
-            bool: True if the path is safe, False otherwise
-        """
+     
         try:
             base = Path(base_path).resolve()
             target = Path(path).resolve()

@@ -1,10 +1,11 @@
+import asyncio
 from datetime import date, datetime
 import os
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from app.helper.save_pdf import save_pdf_to_server
+from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, UserBookCount
 from sqlalchemy import select,func,case
@@ -314,12 +315,19 @@ class BookFollowUpService:
                 await PDFService.insert_pdf(db, pdf_data)
 
                 # Attempt to delete scanner file
-                try:
-                    scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
-                    os.remove(scanner_path)
-                    logger.info(f"Deleted scanner file: {scanner_path}")
-                except Exception as e:
-                    logger.warning(f"Could not delete scanner file {scanner_path}: {str(e)}")
+                # try:
+                #     scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+                #     os.remove(scanner_path)
+                #     logger.info(f"Deleted scanner file: {scanner_path}")
+                # except Exception as e:
+                #     logger.warning(f"Could not delete scanner file {scanner_path}: {str(e)}")
+
+            # Delete original file (with delay)
+            scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+            print(f"Attempting to delete: {scanner_path}")
+            if os.path.isfile(scanner_path):                  # isfile Test whether a path is a regular file return bool                         
+            # delayed_delete(scanner_path, delay_sec=3)
+                asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))   
 
             # Commit changes
             await db.commit()
@@ -541,19 +549,20 @@ class BookFollowUpService:
 
 
 
-
+#This means: if BookFollowUpTable.bookType equals 'خارجي', then return 1 (indicating a match). If not, it returns None by default
     @staticmethod
     async def get_book_type_counts(db: AsyncSession) -> BookTypeCounts:
         try:
             query = select(
-                func.count(case((BookFollowUpTable.bookType == 'خارجي', 1))).label('External'),
-                func.count(case((BookFollowUpTable.bookType == 'داخلي', 1))).label('Internal'),
-                func.count(case((BookFollowUpTable.bookType == 'فاكس', 1))).label('Fax')
+                func.count(case((BookFollowUpTable.bookType == 'خارجي', 1))).label('External'),  #label is a way to assign a name to a column in the result set
+                func.count(case((BookFollowUpTable.bookType == 'داخلي', 1))).label('Internal'),  #case returns 1 if the condition is met (the bookType matches)
+                func.count(case((BookFollowUpTable.bookType == 'فاكس', 1))).label('Fax')         
             )
             result = await db.execute(query)
-            row = result.first()
+            row:BookTypeCounts = result.first()
+            print(f"row get_book_type_counts {row}")
             return BookTypeCounts(
-                External=row.External or 0,
+                External=row.External or 0, 
                 Internal=row.Internal or 0,
                 Fax=row.Fax or 0
             )
@@ -594,7 +603,7 @@ class BookFollowUpService:
                 .order_by(func.count(BookFollowUpTable.id).desc())
             )
             result = await db.execute(query)
-            rows = result.fetchall()
+            rows:UserBookCount = result.fetchall()
             return [UserBookCount(username=row.username, bookCount=row.bookCount) for row in rows]
         except Exception as e:
             print(f"Error in get_user_book_counts: {str(e)}")

@@ -409,7 +409,11 @@ async def update_book_with_pdf(
         form_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
                        incomingDate, subject, destination, bookAction, bookStatus,
                        notes, userID, file]
-        if all(v is None for v in form_fields):
+        
+        # If all(v is None for v in form_fields) is True: This means that every field in form_fields is None.
+        # If all(...) is False: This means that at least one field has a value (i.e., is not None)
+
+        if all(v is None for v in form_fields):   # if all return true will raise HTTPException if false will not
             raise HTTPException(status_code=400, detail="At least one field or file must be provided")
 
         # Create book data model
