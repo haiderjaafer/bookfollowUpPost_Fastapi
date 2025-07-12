@@ -51,7 +51,7 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
         expose_headers=["*"]
     )
 
-    # ✅ Register routers
+    #  Register routers
     app.include_router(bookFollowUpRouter)
     app.include_router(router)
 

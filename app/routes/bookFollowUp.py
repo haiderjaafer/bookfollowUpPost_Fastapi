@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime,timedelta, timezone
+from pathlib import Path
 import traceback
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
@@ -545,21 +546,56 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
 
 
 # Specific file path
-FILE_PATH = r"D:\booksFollowUp\pdfScanner\book.pdf"
+file_path = r"D:\booksFollowUp\pdfScanner\book.pdf"
 
 # Route to serve book.pdf
 @bookFollowUpRouter.get("/files/book")
 async def get_book_pdf():
     try:
-        # Check if file exists
-        if not os.path.isfile(FILE_PATH):
-            raise HTTPException(status_code=404, detail="File book.pdf not found")
+        print("file book")  # Debugging print
+        logger.info("Handling request for book.pdf")
         
-        # Return file content
-        return FileResponse(FILE_PATH, media_type="application/pdf")
+        # Construct file path
+        #file_path: Path = settings.PDF_SOURCE_PATH / "book.pdf"
+        logger.info(f"Attempting to serve file: {file_path}")
+
+        # Ensure the filename is exactly 'book.pdf'
+        if file_path.name.lower() != "book.pdf":
+            logger.warning(f"Invalid filename: {file_path.name}")
+            raise HTTPException(status_code=404, detail="Only book.pdf is allowed")
+
+        # Check if file actually exists
+        if not file_path.is_file():
+            logger.warning(f"File not found: {file_path}")
+            raise HTTPException(status_code=404, detail="File book.pdf not found")
+
+        # Check if file is empty
+        if file_path.stat().st_size == 0:
+            logger.warning(f"File is empty: {file_path}")
+            raise HTTPException(status_code=400, detail="File book.pdf is empty")
+
+        # Return the PDF file
+        logger.info(f"Successfully serving file: {file_path}")
+        return FileResponse(
+            path=file_path.as_posix(),
+            media_type="application/pdf",
+            filename="book.pdf"
+        )
+
+    except HTTPException:
+        raise  # Re-raise known HTTP exceptions
     except Exception as e:
+        logger.error(f"Server error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-    
+
+
+
+
+
+
+
+
+
 
 
 @bookFollowUpRouter.get("/counts/book-type", response_model=BookTypeCounts)
