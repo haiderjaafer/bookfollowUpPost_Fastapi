@@ -546,7 +546,7 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
 
 
 # Specific file path
-file_path = r"D:\booksFollowUp\pdfScanner\book.pdf"
+#file_path = r"D:\booksFollowUp\pdfScanner\book.pdf"
 
 # Route to serve book.pdf
 @bookFollowUpRouter.get("/files/book")
@@ -556,7 +556,7 @@ async def get_book_pdf():
         logger.info("Handling request for book.pdf")
         
         # Construct file path
-        #file_path: Path = settings.PDF_SOURCE_PATH / "book.pdf"
+        file_path: Path = settings.PDF_SOURCE_PATH / "book.pdf"
         logger.info(f"Attempting to serve file: {file_path}")
 
         # Ensure the filename is exactly 'book.pdf'
