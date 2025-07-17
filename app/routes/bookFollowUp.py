@@ -9,6 +9,7 @@ from sqlalchemy import select,extract,func
 from sqlalchemy.ext.asyncio import AsyncSession  #  Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  #  Import async DB dependency
 from app.models.architecture.committees import Committee, CommitteeResponse
+from app.models.architecture.department import Department, DepartmentNameResponse
 from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
@@ -676,4 +677,40 @@ async def get_all_committees(db: AsyncSession = Depends(get_async_db)):
     
     except Exception as e:
         logger.error(f"Error fetching committees: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+
+
+# GET department names by coID
+@bookFollowUpRouter.get("/{coID}/departments", response_model=List[DepartmentNameResponse])
+async def get_department_names_by_coID(coID: int, db: AsyncSession = Depends(get_async_db)):
+    try:
+        logger.info(f"Fetching department names for coID: {coID}")
+        
+        # Verify if committee exists (optional, for validation)
+        result = await db.execute(select(Committee).filter(Committee.coID == coID))
+        committee = result.scalars().first()
+        if not committee:
+            logger.warning(f"Committee with coID {coID} not found")
+            raise HTTPException(status_code=404, detail=f"Committee with coID {coID} not found")
+        
+        # Query departments filtered by coID
+        result = await db.execute(select(Department).filter(Department.coID == coID))
+        departments = result.scalars().all()
+        
+        if not departments:
+            logger.warning(f"No departments found for coID {coID}")
+            return []
+        
+        # Convert to list of Pydantic models
+        department_names = [DepartmentNameResponse(departmentName=department.departmentName) for department in departments]
+        logger.info(f"Retrieved {len(department_names)} department names for coID {coID}")
+        return department_names
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching department names for coID {coID}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
