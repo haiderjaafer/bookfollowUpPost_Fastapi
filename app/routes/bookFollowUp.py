@@ -8,6 +8,7 @@ import pydantic
 from sqlalchemy import select,extract,func
 from sqlalchemy.ext.asyncio import AsyncSession  #  Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  #  Import async DB dependency
+from app.models.architecture.committees import Committee, CommitteeResponse
 from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
@@ -552,12 +553,22 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
 @bookFollowUpRouter.get("/files/book")
 async def get_book_pdf():
     try:
-        print("file book")  # Debugging print
         logger.info("Handling request for book.pdf")
         
         # Construct file path
         file_path: Path = settings.PDF_SOURCE_PATH / "book.pdf"
         logger.info(f"Attempting to serve file: {file_path}")
+        logger.info(f"PDF_SOURCE_PATH: {settings.PDF_SOURCE_PATH}")
+        logger.info(f"Does PDF_SOURCE_PATH exist? {settings.PDF_SOURCE_PATH.exists()}")
+        logger.info(f"Does PDF_SOURCE_PATH is dir? {settings.PDF_SOURCE_PATH.is_dir()}")
+
+        # Validate PDF_SOURCE_PATH
+        if not settings.PDF_SOURCE_PATH.exists():
+            logger.error(f"PDF_SOURCE_PATH does not exist: {settings.PDF_SOURCE_PATH}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Server configuration error: PDF source path does not exist ({settings.PDF_SOURCE_PATH})"
+            )
 
         # Ensure the filename is exactly 'book.pdf'
         if file_path.name.lower() != "book.pdf":
@@ -567,12 +578,31 @@ async def get_book_pdf():
         # Check if file actually exists
         if not file_path.is_file():
             logger.warning(f"File not found: {file_path}")
-            raise HTTPException(status_code=404, detail="File book.pdf not found")
+            # Include file path in the error detail for debugging
+            raise HTTPException(
+                status_code=404,
+                detail=f"لا يوجد ملف سكنر book.pdf في المسار: {file_path}"
+            )
+
+        # Check file permissions
+        if not os.access(file_path, os.R_OK):
+            logger.error(f"No read permission for file: {file_path}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"No read permission for file: {file_path}"
+            )
 
         # Check if file is empty
         if file_path.stat().st_size == 0:
             logger.warning(f"File is empty: {file_path}")
             raise HTTPException(status_code=400, detail="File book.pdf is empty")
+
+        # Verify file is a PDF by checking the magic number
+        with open(file_path, 'rb') as f:
+            header = f.read(4).decode('latin1')
+            if not header.startswith('%PDF'):
+                logger.warning(f"File is not a valid PDF: {file_path}")
+                raise HTTPException(status_code=400, detail="File is not a valid PDF")
 
         # Return the PDF file
         logger.info(f"Successfully serving file: {file_path}")
@@ -583,11 +613,10 @@ async def get_book_pdf():
         )
 
     except HTTPException:
-        raise  # Re-raise known HTTP exceptions
+        raise
     except Exception as e:
-        logger.error(f"Server error: {str(e)}")
+        logger.error(f"Server error while serving book.pdf: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
 
 
 
@@ -623,4 +652,28 @@ async def get_user_book_counts(db: AsyncSession = Depends(get_async_db)):
         return counts
     except Exception as e:
         print(f"Error in get_user_book_counts route: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+# GET all committees
+@bookFollowUpRouter.get("/committees", response_model=List[CommitteeResponse])
+async def get_all_committees(db: AsyncSession = Depends(get_async_db)):
+    try:
+        logger.info("Fetching all committees")
+        # Query all committees
+        result = await db.execute(select(Committee))
+        committees = result.scalars().all()
+        
+        if not committees:
+            logger.warning("No committees found in the database")
+            return []
+        
+        # Convert to list of Pydantic models
+        committees_list = [CommitteeResponse.from_orm(committee) for committee in committees]
+        logger.info(f"Retrieved {len(committees_list)} committees")
+        return committees_list
+    
+    except Exception as e:
+        logger.error(f"Error fetching committees: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
