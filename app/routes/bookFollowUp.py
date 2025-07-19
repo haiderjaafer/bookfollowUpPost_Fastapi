@@ -46,6 +46,7 @@ async def add_book_with_pdf(
     bookDate: str = Form(...),
     bookType: str = Form(...),
     directoryName: str = Form(...),
+    selectedDepartment: str = Form(...),
     incomingNo: str = Form(...),
     incomingDate: str = Form(...),
     subject: str = Form(...),
@@ -64,6 +65,7 @@ async def add_book_with_pdf(
             bookDate=bookDate,
             bookType=bookType,
             directoryName=directoryName,
+            departmentID=selectedDepartment,
             incomingNo=incomingNo,
             incomingDate=incomingDate,
             subject=subject,
@@ -671,7 +673,7 @@ async def get_all_committees(db: AsyncSession = Depends(get_async_db)):
             return []
         
         # Convert to list of Pydantic models
-        committees_list = [CommitteeResponse.from_orm(committee) for committee in committees]
+        committees_list = [CommitteeResponse.model_validate(committee) for committee in committees]
         logger.info(f"Retrieved {len(committees_list)} committees")
         return committees_list
     
@@ -688,27 +690,27 @@ async def get_all_committees(db: AsyncSession = Depends(get_async_db)):
 async def get_department_names_by_coID(coID: int, db: AsyncSession = Depends(get_async_db)):
     try:
         logger.info(f"Fetching department names for coID: {coID}")
-        
-        # Verify if committee exists (optional, for validation)
         result = await db.execute(select(Committee).filter(Committee.coID == coID))
         committee = result.scalars().first()
         if not committee:
             logger.warning(f"Committee with coID {coID} not found")
             raise HTTPException(status_code=404, detail=f"Committee with coID {coID} not found")
         
-        # Query departments filtered by coID
         result = await db.execute(select(Department).filter(Department.coID == coID))
         departments = result.scalars().all()
-        
         if not departments:
             logger.warning(f"No departments found for coID {coID}")
             return []
         
-        # Convert to list of Pydantic models
-        department_names = [DepartmentNameResponse(departmentName=department.departmentName) for department in departments]
+        department_names = [
+            DepartmentNameResponse(
+                deID=department.deID if department.deID is not None else index + 1,
+                departmentName=department.departmentName
+            )
+            for index, department in enumerate(departments)
+        ]
         logger.info(f"Retrieved {len(department_names)} department names for coID {coID}")
         return department_names
-    
     except HTTPException:
         raise
     except Exception as e:

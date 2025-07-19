@@ -17,7 +17,7 @@ class Department(Base):
 
 # Pydantic model for Department response (single departmentName)
 class DepartmentNameResponse(BaseModel):
+    deID: int
     departmentName: Optional[str] = None
-
     class Config:
         from_attributes = True

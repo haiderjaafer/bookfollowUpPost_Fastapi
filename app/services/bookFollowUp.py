@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
+from app.models.architecture.committees import Committee
+from app.models.architecture.department import Department
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, UserBookCount
 from sqlalchemy import select,func,case
 from fastapi import HTTPException, Request, UploadFile
@@ -107,15 +109,10 @@ class BookFollowUpService:
     #http://127.0.0.1:9000/api/bookFollowUp/getAllBooksNo
 
 
-  
 
     
- 
-
-
     @staticmethod
     async def getAllFilteredBooksNo(
-        
         request: Request,
         db: AsyncSession,
         page: int = 1,
@@ -129,6 +126,7 @@ class BookFollowUpService:
     ) -> Dict[str, Any]:
         """
         Retrieve all BookFollowUpTable records with pagination, optional filters, and associated PDFs.
+        Includes departmentName and Com without relationships.
         Returns data for DynamicTable with pdfFiles and username for each record.
         """
         try:
@@ -143,7 +141,7 @@ class BookFollowUpService:
             if directoryName:
                 filters.append(BookFollowUpTable.directoryName == directoryName.strip())
             if subject:
-                filters.append(BookFollowUpTable.subject == subject.strip())    
+                filters.append(BookFollowUpTable.subject == subject.strip())
             if incomingNo:
                 filters.append(BookFollowUpTable.incomingNo == incomingNo.strip())
 
@@ -156,12 +154,12 @@ class BookFollowUpService:
             )
             count_result = await db.execute(count_stmt)
             total = count_result.scalar() or 0
-            print(f"Total records: {total}, Page: {page}, Limit: {limit}")
+            logger.info(f"Total records: {total}, Page: {page}, Limit: {limit}")
 
             # Step 2: Pagination offset
             offset = (page - 1) * limit
 
-            # Step 3: Select paginated BookFollowUpTable records with username
+            # Step 3: Select paginated BookFollowUpTable records with username, departmentName, and Com
             book_stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -169,6 +167,7 @@ class BookFollowUpService:
                     BookFollowUpTable.bookNo,
                     BookFollowUpTable.bookDate,
                     BookFollowUpTable.directoryName,
+                    BookFollowUpTable.deID,
                     BookFollowUpTable.incomingNo,
                     BookFollowUpTable.incomingDate,
                     BookFollowUpTable.subject,
@@ -178,9 +177,13 @@ class BookFollowUpService:
                     BookFollowUpTable.notes,
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
-                    Users.username
+                    Users.username,
+                    Department.departmentName,
+                    Committee.Com
                 )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
                 .filter(*filters)
                 .distinct(BookFollowUpTable.bookNo)
                 .order_by(BookFollowUpTable.bookNo)
@@ -235,12 +238,14 @@ class BookFollowUpService:
                     "notes": row.notes,
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
-                    "username": row.username,  # Add username for book creator
-                    "pdfFiles": pdf_map.get(row.bookNo, [])  # PDFs with their usernames
+                    "username": row.username,
+                    "departmentName": row.departmentName,
+                    "Com": row.Com,
+                    "pdfFiles": pdf_map.get(row.bookNo, [])
                 }
                 for row in book_rows
             ]
-            print(f"Fetched {len(data)} records with PDFs")
+            logger.info(f"Fetched {len(data)} records with PDFs")
 
             # Step 7: Response
             return {
@@ -251,8 +256,13 @@ class BookFollowUpService:
                 "totalPages": (total + limit - 1) // limit
             }
         except Exception as e:
-            print(f"Error fetching books: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")     
+            logger.error(f"Error fetching books: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")  
+
+    
+ 
+
+
         
 
 

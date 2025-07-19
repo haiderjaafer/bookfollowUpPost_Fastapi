@@ -17,6 +17,7 @@ class BookFollowUpTable(Base):
     bookNo = Column(String(10), nullable=True)
     bookDate = Column(Date, nullable=True)
     directoryName = Column(Unicode, nullable=True)
+    deID = Column(Integer, nullable=True)
     incomingNo = Column(String(10), nullable=True)   # fix IncomingNo with sql table
     incomingDate = Column(Date, nullable=True)       # fix IncomingDate with sql table
     subject = Column(Unicode(500), nullable=True)
@@ -37,6 +38,7 @@ class BookFollowUpCreate(BaseModel):
     bookNo: Optional[str] = None
     bookDate: Optional[str] = None
     directoryName: Optional[str] = None
+    departmentID:Optional[int] = None
     incomingNo: Optional[str] = None
     incomingDate: Optional[str] = None
     subject: Optional[str] = None
@@ -46,6 +48,8 @@ class BookFollowUpCreate(BaseModel):
     notes: Optional[str] = None
     currentDate: Optional[str] = None
     userID: Optional[int] = None
+    departmentName: Optional[str] = None  # Add departmentName
+    Com: Optional[str] = None  # Add committee name
 
     @field_validator('bookDate', 'incomingDate', 'currentDate')
     def validate_date(cls, value):
@@ -70,6 +74,7 @@ class BookFollowUpResponse(BaseModel):
     bookNo: Optional[str]= None
     bookDate: Optional[date]= None
     directoryName: Optional[str]= None
+    departmentID:Optional[int] = None
     incomingNo: Optional[str]= None
     incomingDate: Optional[date]= None
     subject: Optional[str]= None
@@ -101,6 +106,7 @@ class BookFollowUpWithPDFResponseForUpdateByBookID(BaseModel):
     bookNo: Optional[str] = None
     bookDate: Optional[str] = None
     directoryName: Optional[str] = None
+    departmentID:Optional[int] = None
     incomingNo: Optional[str] = None
     incomingDate: Optional[str] = None
     subject: Optional[str] = None
