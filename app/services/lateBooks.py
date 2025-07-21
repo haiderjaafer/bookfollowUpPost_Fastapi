@@ -3,6 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import Date, select, func, cast
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
+from app.models.architecture.committees import Committee
+from app.models.architecture.department import Department
 from app.models.bookFollowUpTable import BookFollowUpTable
 from app.models.users import Users
 
@@ -54,10 +56,11 @@ class LateBookFollowUpService:
                 BookFollowUpTable.notes,
                 BookFollowUpTable.currentDate,
                 BookFollowUpTable.userID,
-                Users.username
-            ).outerjoin(
-                Users, BookFollowUpTable.userID == Users.id
-            ).filter(
+                Users.username,
+                BookFollowUpTable.deID,
+                Department.departmentName,
+                Committee.Com
+            ).outerjoin( Users, BookFollowUpTable.userID == Users.id ).outerjoin(Department, BookFollowUpTable.deID == Department.deID).outerjoin(Committee, Department.coID == Committee.coID).filter(
                 BookFollowUpTable.bookStatus == 'قيد الانجاز',
                 cast(BookFollowUpTable.incomingDate, Date) >= start_date,
                 cast(BookFollowUpTable.incomingDate, Date) <= current_date
@@ -88,6 +91,9 @@ class LateBookFollowUpService:
                     "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
                     "userID": book.userID,
                     "username": book.username,
+                    "deID": book.deID,
+                    "Com": book.Com,
+                    "departmentName": book.departmentName,
                     "pdfFiles": []  # Empty array to match BookFollowUpData
                 }
                 for book in late_books

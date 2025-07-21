@@ -239,8 +239,10 @@ class BookFollowUpService:
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
                     "username": row.username,
+                    "deID": row.deID,
+                     "Com": row.Com,
                     "departmentName": row.departmentName,
-                    "Com": row.Com,
+                   
                     "pdfFiles": pdf_map.get(row.bookNo, [])
                 }
                 for row in book_rows
