@@ -358,24 +358,33 @@ class BookFollowUpService:
 
 
 
+    
     @staticmethod
     async def get_book_with_pdfs(db: AsyncSession, id: int) -> BookFollowUpWithPDFResponseForUpdateByBookID:
         """
-        Fetch a book by ID with associated PDFs, PDF count, and username.
+        Fetch a book by ID with associated PDFs, PDF count, departmentName, Com, and username.
         Args:
             db: Async SQLAlchemy session.
             id: Book ID to fetch.
         Returns:
-            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and username.
+            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, departmentName, Com, and username.
         Raises:
             HTTPException: If book not found or database error occurs.
         """
         try:
-            # Fetch book, PDFs, and users in a single query
+            # Fetch book, PDFs, department, committee, and users in a single query
             result = await db.execute(
-                select(BookFollowUpTable, PDFTable, Users)
+                select(
+                    BookFollowUpTable,
+                    PDFTable,
+                    Users.username.label("pdf_username"),  # Username for PDFs
+                    Department.departmentName,
+                    Committee.Com
+                )
                 .outerjoin(PDFTable, BookFollowUpTable.id == PDFTable.bookID)
                 .outerjoin(Users, PDFTable.userID == Users.id)  # Join Users with PDFTable.userID
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
                 .filter(BookFollowUpTable.id == id)
             )
             rows = result.fetchall()
@@ -384,9 +393,13 @@ class BookFollowUpService:
                 logger.error(f"Book ID {id} not found")
                 raise HTTPException(status_code=404, detail="Book not found")
 
-            # Extract book, PDFs, and user
-            book = rows[0][0]
-            pdfs = [(row[1], row[2]) for row in rows if row[1]] or []  # Pair PDF with its user
+            # Extract book, PDFs, departmentName, and Com
+            book = rows[0][0]  # BookFollowUpTable
+            departmentName = rows[0][3]  # Department.departmentName
+            Com = rows[0][4]  # Committee.Com
+            pdfs = [(row[1], row[2]) for row in rows if row[1]] or []  # Pair PDF with its username
+
+            logger.info(f"Book backend: {book.id}, departmentName: {departmentName}, Com: {Com}")
 
             # Convert date fields to strings for book
             book_date = book.bookDate.strftime('%Y-%m-%d') if isinstance(book.bookDate, date) else book.bookDate
@@ -399,17 +412,17 @@ class BookFollowUpService:
                     id=pdf.id,
                     bookNo=pdf.bookNo,
                     pdf=pdf.pdf,
-                    currentDate=pdf.currentDate,
-                    username=user.username if user else None
+                    currentDate=pdf.currentDate.strftime('%Y-%m-%d') if isinstance(pdf.currentDate, date) else pdf.currentDate,
+                    username=pdf_username
                 )
-                for pdf, user in pdfs
+                for pdf, pdf_username in pdfs
             ]
 
-            # Fetch the book owner's username separately if needed
+            # Fetch the book owner's username separately
             book_user = None
             if book.userID:
                 book_user_result = await db.execute(
-                    select(Users).filter(Users.id == book.userID)
+                    select(Users.username).filter(Users.id == book.userID)
                 )
                 book_user = book_user_result.scalars().first()
 
@@ -420,6 +433,7 @@ class BookFollowUpService:
                 bookNo=book.bookNo,
                 bookDate=book_date,
                 directoryName=book.directoryName,
+                deID=book.deID,
                 incomingNo=book.incomingNo,
                 incomingDate=incoming_date,
                 subject=book.subject,
@@ -429,20 +443,21 @@ class BookFollowUpService:
                 notes=book.notes,
                 currentDate=current_date,
                 userID=book.userID,
-                username=book_user.username if book_user else None,
+                username=book_user,
                 countOfPDFs=len(pdf_responses),
-                pdfFiles=pdf_responses
+                pdfFiles=pdf_responses,
+                departmentName=departmentName,
+                Com=Com
             )
 
-            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs and username {book_data.username}")
+            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs, username {book_data.username}, departmentName {departmentName}, Com {Com}")
             return book_data
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error fetching book ID {id}: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-        
+            logger.error(f"Error fetching book ID {id}: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")    
 
 
 

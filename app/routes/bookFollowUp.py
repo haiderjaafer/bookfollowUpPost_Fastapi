@@ -389,6 +389,7 @@ async def update_book_with_pdf(
     incomingDate: Optional[str] = Form(None),
     subject: Optional[str] = Form(None),
     destination: Optional[str] = Form(None),
+    deID: str = Form(...),
     bookAction: Optional[str] = Form(None),
     bookStatus: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
@@ -412,7 +413,7 @@ async def update_book_with_pdf(
     try:
         # Validate at least one field or file is provided
         form_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
-                       incomingDate, subject, destination, bookAction, bookStatus,
+                       incomingDate, subject, destination,deID, bookAction, bookStatus,
                        notes, userID, file]
         
         # If all(v is None for v in form_fields) is True: This means that every field in form_fields is None.
@@ -431,10 +432,12 @@ async def update_book_with_pdf(
             incomingDate=incomingDate,
             subject=subject,
             destination=destination,
+            deID=deID,
             bookAction=bookAction,
             bookStatus=bookStatus,
             notes=notes,
-            userID=int(userID) if userID else None
+            userID=int(userID) if userID else None,
+
         )
 
         # Call service method
