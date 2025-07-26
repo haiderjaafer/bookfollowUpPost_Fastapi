@@ -399,29 +399,44 @@ async def update_book_with_pdf(
 ):
     """
     Update a book record by ID with provided fields and optionally add a new PDF.
-    Args:
-        id: Path parameter for the book ID.
-        bookNo, bookDate, ...: Optional form fields to update.
-        userID: Optional user ID for book and PDF.
-        file: Optional PDF file to add.
-        db: Async SQLAlchemy session.
-    Returns:
-        JSON response with success message and updated book ID.
-    Raises:
-        HTTPException: For validation errors, missing book, or server errors.
     """
     try:
-        # Validate at least one field or file is provided
-        form_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
-                       incomingDate, subject, destination,deID, bookAction, bookStatus,
-                       notes, userID, file]
+        # Helper function to convert empty strings to None
+        def normalize_form_value(value):
+            if value is None or value == '' or value == 'null':
+                return None
+            return value
+
+        # Normalize all form values
+        bookNo = normalize_form_value(bookNo)
+        bookDate = normalize_form_value(bookDate)
+        bookType = normalize_form_value(bookType)
+        directoryName = normalize_form_value(directoryName)
+        incomingNo = normalize_form_value(incomingNo)
+        incomingDate = normalize_form_value(incomingDate)
+        subject = normalize_form_value(subject)
+        destination = normalize_form_value(destination)
+        bookAction = normalize_form_value(bookAction)
+        bookStatus = normalize_form_value(bookStatus)
+        notes = normalize_form_value(notes)
+        userID = normalize_form_value(userID)
+
+        # Validate at least one field is being updated (file is optional)
+        # Exclude deID from this check since it's required but might not be changing
+        updatable_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
+                           incomingDate, subject, destination, bookAction, bookStatus,
+                           notes, userID]
+                 
+        # Check if at least one updatable field has a value, or a file is being uploaded
+        has_field_update = any(v is not None for v in updatable_fields)
+        has_file_update = file is not None
         
-        # If all(v is None for v in form_fields) is True: This means that every field in form_fields is None.
-        # If all(...) is False: This means that at least one field has a value (i.e., is not None)
-
-        if all(v is None for v in form_fields):   # if all return true will raise HTTPException if false will not
-            raise HTTPException(status_code=400, detail="At least one field or file must be provided")
-
+        if not has_field_update and not has_file_update:
+            raise HTTPException(
+                status_code=400, 
+                detail="At least one field must be updated or a file must be provided"
+            )
+ 
         # Create book data model
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
@@ -437,23 +452,30 @@ async def update_book_with_pdf(
             bookStatus=bookStatus,
             notes=notes,
             userID=int(userID) if userID else None,
-
         )
-
-        # Call service method
+ 
+        # FIXED: Call service method with proper file handling
+        # Only pass file if it's actually uploaded and valid
+        file_to_pass = None
+        if file and file.filename and file.size > 0:
+            file_to_pass = file
+            logger.info(f"File '{file.filename}' will be uploaded for book ID {id}")
+        else:
+            logger.info(f"No valid file provided for book ID {id}")
+        
         updated_book_id = await BookFollowUpService.update_book(
             db,
             id,
             book_data,
-            file,
+            file_to_pass,  # FIXED: Pass None if no valid file
             int(userID) if userID else None
         )
-
+ 
         return {
             "message": "Book updated successfully",
             "bookID": updated_book_id
         }
-
+ 
     except ValueError as e:
         logger.error(f"Invalid input for ID {id}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
@@ -462,6 +484,9 @@ async def update_book_with_pdf(
     except Exception as e:
         logger.error(f"Error in update_book_with_pdf for ID {id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+
+
 
 
 @bookFollowUpRouter.get("/getBookFollowUpByBookID/{id}", response_model=BookFollowUpWithPDFResponseForUpdateByBookID)
