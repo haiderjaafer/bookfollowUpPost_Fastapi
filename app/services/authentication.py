@@ -39,11 +39,11 @@ class AuthenticationService:
             user = result.scalars().first()
             
             if not user:
-                raise HTTPException(status_code=400, detail="Invalid username or password")
+                raise HTTPException(status_code=400, detail="اسم المستخدم او كلمة المرور غير صحيحة")
             
             # Verify password
             if not pwd_context.verify(password, user.password):
-                raise HTTPException(status_code=400, detail="Invalid username or password")
+                raise HTTPException(status_code=400, detail="اسم المستخدم او كلمة المرور غير صحيحة")
             
             # Return user data (excluding password)
             return UserResponse(
