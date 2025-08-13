@@ -39,11 +39,11 @@ class AuthenticationService:
             user = result.scalars().first()
             
             if not user:
-                raise HTTPException(status_code=400, detail="اسم المستخدم او كلمة المرور غير صحيحة")
+                raise HTTPException(status_code=400, detail="Invalid username or password")
             
             # Verify password
             if not pwd_context.verify(password, user.password):
-                raise HTTPException(status_code=400, detail="اسم المستخدم او كلمة المرور غير صحيحة")
+                raise HTTPException(status_code=400, detail="Invalid username or password")
             
             # Return user data (excluding password)
             return UserResponse(
@@ -93,6 +93,19 @@ class AuthenticationService:
         Returns:
             UserResponse
         """
+        # 1. Check if user already exists
+        result = await db.execute(
+        select(Users).where(Users.username.ilike(user_create.username)) 
+        )
+
+        print(type(result))
+        existing_user = result.scalar_one_or_none()   #will be result: Result[Tuple[Users]] Result object is obtained from executing a Select statement
+        print(f"user id...{existing_user.id}")        # will print single value 1006   
+        print(f"username...{existing_user.username}") # will print single value saeed  
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User already exists")
+
+        
         hashed_password = pwd_context.hash(user_create.password) if user_create.password else None
         db_user = Users(
             username=user_create.username,

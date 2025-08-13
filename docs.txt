@@ -1,0 +1,16 @@
+in services->authentication -> create_user function
+
+In SQLAlchemy, ilike is a case-insensitive pattern matching operator, similar to the LIKE operator but ignoring case differences. It is primarily used with PostgreSQL databases, as ILIKE is a PostgreSQL-specific extension. For other database backends, SQLAlchemy typically implements ilike by applying the lower() SQL function to both the column and the search pattern before performing a LIKE comparison.
+
+# Example usage of ilike
+# Find users whose names contain "john" (case-insensitive)
+users = session.query(User).filter(User.name.ilike("%john%")).all()
+
+for user in users:
+    print(f"User ID: {user.id}, Name: {user.name}")
+
+---------------------------------------------------------------------------------------------------------------
+
+scalar_one_or_none() in SQLAlchemy is a method used with the Result object returned by session.execute() (or connection.execute()) to retrieve a single scalar value from a query result. It is designed for queries that are expected to return at most one row, and from that row, you want to extract a single column's value directly.
+
+n SQLAlchemy, result.scalar_one_or_none() is a method available on a Result object (obtained from executing a Select statement) that aims to retrieve a single scalar value from the query's result set.

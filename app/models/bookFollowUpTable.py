@@ -119,8 +119,6 @@ class BookFollowUpWithPDFResponseForUpdateByBookID(BaseModel):
     username: Optional[str] = None
     countOfPDFs: Optional[int] = None
     pdfFiles: List[PDFResponse] = []
-    Com: Optional[str] = None
-    departmentName:Optional[str] = None
 
     @field_validator('bookDate', 'incomingDate', 'currentDate')
     def validate_date(cls, value):

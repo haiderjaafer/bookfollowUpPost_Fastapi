@@ -41,9 +41,9 @@ async def async_delayed_delete(file_path: str, delay_sec: int = 3):
     await asyncio.sleep(delay_sec)
     try:
         os.remove(file_path)
-        print(f"✅ Async deleted: {file_path}")
+        print(f" Async deleted: {file_path}")
     except Exception as e:
-        print(f"⚠️ Async deletion failed: {e}")
+        print(f" Async deletion failed: {e}")
 
 
 

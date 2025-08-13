@@ -171,7 +171,7 @@ class BookFollowUpService:
                     BookFollowUpTable.incomingNo,
                     BookFollowUpTable.incomingDate,
                     BookFollowUpTable.subject,
-                    # BookFollowUpTable.destination,
+                    BookFollowUpTable.destination,
                     BookFollowUpTable.bookAction,
                     BookFollowUpTable.bookStatus,
                     BookFollowUpTable.notes,
@@ -232,7 +232,7 @@ class BookFollowUpService:
                     "incomingNo": row.incomingNo,
                     "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
                     "subject": row.subject,
-                    # "destination": row.destination,
+                    "destination": row.destination,
                     "bookAction": row.bookAction,
                     "bookStatus": row.bookStatus.strip().lower() if row.bookStatus else None,
                     "notes": row.notes,
@@ -304,109 +304,78 @@ class BookFollowUpService:
             # Update fields, excluding unset values
             update_data = book_data.model_dump(exclude_unset=True)
             logger.debug(f"Updating book ID {id} with data: {update_data}")
-            
-            # FIXED: Only update non-None values and skip currentDate if no actual field updates
-            has_field_updates = False
             for key, value in update_data.items():
                 if value is not None:  # Skip None values
                     setattr(book, key, value)
-                    has_field_updates = True
-            
-            # FIXED: Only update currentDate if there are actual field updates OR a file is being uploaded
-            if has_field_updates or file:
-                book.currentDate = datetime.now().date().strftime('%Y-%m-%d')
-                logger.info(f"Updated currentDate for book ID {id}")
+            # Set currentDate as string
+            book.currentDate = datetime.now().date().strftime('%Y-%m-%d')   # here old data(Excel) of currentDate is empty so here will updated with datetime.now() #### check todo
 
-            # FIXED: Handle PDF upload ONLY if file is provided
-            if file:
-                # FIXED: Check if user_id is provided when file is uploaded
-                if not user_id:
-                    logger.warning(f"File uploaded for book ID {id} but no user_id provided")
-                    # You can either require user_id or use a default value
-                    # Option 1: Raise error
-                    # raise HTTPException(status_code=400, detail="User ID required when uploading file")
-                    # Option 2: Use default user_id (uncomment line below)
-                    # user_id = 1  # Default user ID
-                
-                if user_id:  # Only proceed if user_id is available
-                    try:
-                        count = await PDFService.get_pdf_count(db, id)
-                        pdf_path = save_pdf_to_server(
-                            file.file, book.bookNo, book.bookDate, count, settings.PDF_UPLOAD_PATH
-                        )
-                        pdf_data = PDFCreate(
-                            bookID=id,
-                            bookNo=book.bookNo,
-                            countPdf=count,
-                            pdf=pdf_path,
-                            userID=user_id,
-                            currentDate=datetime.now().date().strftime('%Y-%m-%d')
-                        )
-                        await PDFService.insert_pdf(db, pdf_data)
-                        logger.info(f"PDF uploaded and saved for book ID {id}")
-                        
-                        # FIXED: Only attempt file deletion if file was actually uploaded and has filename
-                        if hasattr(file, 'filename') and file.filename:
-                            scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
-                            print(f"Attempting to delete: {scanner_path}")
-                            if os.path.isfile(scanner_path):
-                                asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))
-                                logger.info(f"Scheduled deletion of scanner file: {scanner_path}")
-                            else:
-                                logger.warning(f"Scanner file not found: {scanner_path}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error handling PDF upload for book ID {id}: {str(e)}")
-                        # Don't raise exception here, just log it - book update should still succeed
-                        # If you want PDF upload failures to fail the entire operation, uncomment below:
-                        # raise HTTPException(status_code=500, detail=f"PDF upload failed: {str(e)}")
-            else:
-                logger.info(f"No file uploaded for book ID {id} - skipping PDF processing")
+            # Handle PDF upload if provided
+            if file and user_id:
+                count = await PDFService.get_pdf_count(db, id)
+                pdf_path = save_pdf_to_server(
+                    file.file, book.bookNo, book.bookDate, count, settings.PDF_UPLOAD_PATH
+                )
+                pdf_data = PDFCreate(
+                    bookID=id,
+                    bookNo=book.bookNo,
+                    countPdf=count,
+                    pdf=pdf_path,
+                    userID=user_id,
+                    currentDate=datetime.now().date().strftime('%Y-%m-%d')
+                )
+                await PDFService.insert_pdf(db, pdf_data)
+
+                # Attempt to delete scanner file
+                # try:
+                #     scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+                #     os.remove(scanner_path)
+                #     logger.info(f"Deleted scanner file: {scanner_path}")
+                # except Exception as e:
+                #     logger.warning(f"Could not delete scanner file {scanner_path}: {str(e)}")
+
+            # Delete original file (with delay)
+            scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+            print(f"Attempting to delete: {scanner_path}")
+            if os.path.isfile(scanner_path):                  # isfile Test whether a path is a regular file return bool                         
+            # delayed_delete(scanner_path, delay_sec=3)
+                asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))   
 
             # Commit changes
             await db.commit()
             await db.refresh(book)
-            logger.info(f"Successfully updated book ID {id}")
+            logger.info(f"Updated book ID {id}")
             return book.id
 
         except HTTPException:
-            await db.rollback()
             raise
         except Exception as e:
             logger.error(f"Error updating book ID {id}: {str(e)}")
             await db.rollback()
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")    
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        
     
 
 
 
-    
     @staticmethod
     async def get_book_with_pdfs(db: AsyncSession, id: int) -> BookFollowUpWithPDFResponseForUpdateByBookID:
         """
-        Fetch a book by ID with associated PDFs, PDF count, departmentName, Com, and username.
+        Fetch a book by ID with associated PDFs, PDF count, and username.
         Args:
             db: Async SQLAlchemy session.
             id: Book ID to fetch.
         Returns:
-            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, departmentName, Com, and username.
+            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and username.
         Raises:
             HTTPException: If book not found or database error occurs.
         """
         try:
-            # Fetch book, PDFs, department, committee, and users in a single query
+            # Fetch book, PDFs, and users in a single query
             result = await db.execute(
-                select(
-                    BookFollowUpTable,
-                    PDFTable,
-                    Users.username.label("pdf_username"),  # Username for PDFs
-                    Department.departmentName,
-                    Committee.Com
-                )
+                select(BookFollowUpTable, PDFTable, Users)
                 .outerjoin(PDFTable, BookFollowUpTable.id == PDFTable.bookID)
                 .outerjoin(Users, PDFTable.userID == Users.id)  # Join Users with PDFTable.userID
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
                 .filter(BookFollowUpTable.id == id)
             )
             rows = result.fetchall()
@@ -415,13 +384,9 @@ class BookFollowUpService:
                 logger.error(f"Book ID {id} not found")
                 raise HTTPException(status_code=404, detail="Book not found")
 
-            # Extract book, PDFs, departmentName, and Com
-            book = rows[0][0]  # BookFollowUpTable
-            departmentName = rows[0][3]  # Department.departmentName
-            Com = rows[0][4]  # Committee.Com
-            pdfs = [(row[1], row[2]) for row in rows if row[1]] or []  # Pair PDF with its username
-
-            logger.info(f"Book backend: {book.id}, departmentName: {departmentName}, Com: {Com}")
+            # Extract book, PDFs, and user
+            book = rows[0][0]
+            pdfs = [(row[1], row[2]) for row in rows if row[1]] or []  # Pair PDF with its user
 
             # Convert date fields to strings for book
             book_date = book.bookDate.strftime('%Y-%m-%d') if isinstance(book.bookDate, date) else book.bookDate
@@ -434,17 +399,17 @@ class BookFollowUpService:
                     id=pdf.id,
                     bookNo=pdf.bookNo,
                     pdf=pdf.pdf,
-                    currentDate=pdf.currentDate.strftime('%Y-%m-%d') if isinstance(pdf.currentDate, date) else pdf.currentDate,
-                    username=pdf_username
+                    currentDate=pdf.currentDate,
+                    username=user.username if user else None
                 )
-                for pdf, pdf_username in pdfs
+                for pdf, user in pdfs
             ]
 
-            # Fetch the book owner's username separately
+            # Fetch the book owner's username separately if needed
             book_user = None
             if book.userID:
                 book_user_result = await db.execute(
-                    select(Users.username).filter(Users.id == book.userID)
+                    select(Users).filter(Users.id == book.userID)
                 )
                 book_user = book_user_result.scalars().first()
 
@@ -455,7 +420,6 @@ class BookFollowUpService:
                 bookNo=book.bookNo,
                 bookDate=book_date,
                 directoryName=book.directoryName,
-                deID=book.deID,
                 incomingNo=book.incomingNo,
                 incomingDate=incoming_date,
                 subject=book.subject,
@@ -465,21 +429,20 @@ class BookFollowUpService:
                 notes=book.notes,
                 currentDate=current_date,
                 userID=book.userID,
-                username=book_user,
+                username=book_user.username if book_user else None,
                 countOfPDFs=len(pdf_responses),
-                pdfFiles=pdf_responses,
-                departmentName=departmentName,
-                Com=Com
+                pdfFiles=pdf_responses
             )
 
-            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs, username {book_data.username}, departmentName {departmentName}, Com {Com}")
+            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs and username {book_data.username}")
             return book_data
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error fetching book ID {id}: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")    
+            logger.error(f"Error fetching book ID {id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        
 
 
 

@@ -58,6 +58,17 @@ async def login(
         print(f"token ... {token}")  
         
         # 🔥 CRITICAL: Cookie settings for browser compatibility
+        # response.set_cookie(
+        #     key="jwt_token",
+        #     value=token,
+        #     httponly=True,
+        #     secure=True,        # 🔥 Change this to False for HTTP (local/LAN)
+        #     samesite="lax",
+        #     max_age=60 * 60 * 24 * 30,
+        #     path="/",
+        #     # domain="10.20.11.100"  # 🔥 REMOVE — not needed unless using subdomains
+        # )
+
         response.set_cookie(
             key="jwt_cookies_auth_token",
             value=token,
@@ -69,6 +80,27 @@ async def login(
             # 🔥 DO NOT set domain for localhost
             # domain="127.0.0.1"
         )
+
+
+
+        # response.set_cookie(
+        #     key="jwt_cookies_auth_token",
+        #     value=token,
+        #     # httponly=False,           # Prevent JS access
+        #     # # secure=os.getenv("NODE_ENV") == "production",            # False for localhost HTTP
+        #     secure=False,
+        #     # samesite="none",          # Lax for cross-origin in development
+        #     max_age=60 * 60 * 24 * 30 ,    # 30 days
+        #     # # path="10.20.11.33",                # Available site-wide
+        #     # path="localhost"
+        #     # # 🔥 DO NOT set domain for localhost
+        #     # # domain="127.0.0.1"
+
+        #     domain="10.20.11.33" , # Add this!
+        #     httponly=True,
+        #     samesite="lax",      # IMPORTANT
+        #     # secure=True           # REQUIRED for cross-origin + samesite=none
+        # )
         
         # Add explicit headers for debugging
         # response.headers["Access-Control-Allow-Credentials"] = "true"
@@ -77,6 +109,7 @@ async def login(
         # logger.debug(f"Cookie set: jwtToken (length: {len(token)})")
         
         return {"message": "Login successful", "user": {"id": user.id, "username": user.username}}
+        # return {"token":token}
         
              
     except HTTPException as e:
@@ -88,6 +121,8 @@ async def login(
 
 
 
+from fastapi import HTTPException
+
 @router.post("/register")
 async def register(
     user_create: UserCreate,
@@ -98,15 +133,14 @@ async def register(
     Register a new user.
     """
     try:
-        
         user = await AuthenticationService.create_user(db, user_create)
 
         token = AuthenticationService.generate_jwt(
-        user_id=user.id,
-        username=user.username,
-        permission=user.permission
-            )
-        
+            user_id=user.id,
+            username=user.username,
+            permission=user.permission
+        )
+
         # Set HTTP-only cookie
         response.set_cookie(
             key="jwt_cookies_auth_token",
@@ -118,8 +152,11 @@ async def register(
             path="/"
         )
 
+        return {"message": f"Authenticated {user.username}"}
 
-        return {"message": F"Authenticated{user}"}
+    except HTTPException:
+        # Re-raise HTTPExceptions from create_user without changing them -- this will getback detail if error occured
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
     
