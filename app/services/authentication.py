@@ -93,15 +93,16 @@ class AuthenticationService:
         Returns:
             UserResponse
         """
+        print(user_create)
         # 1. Check if user already exists
         result = await db.execute(
         select(Users).where(Users.username.ilike(user_create.username)) 
         )
 
-        print(type(result))
-        existing_user = result.scalar_one_or_none()   #will be result: Result[Tuple[Users]] Result object is obtained from executing a Select statement
-        print(f"user id...{existing_user.id}")        # will print single value 1006   
-        print(f"username...{existing_user.username}") # will print single value saeed  
+        
+        existing_user = result.scalar_one_or_none()   
+        # print(f"user id...{existing_user.id}")         
+        # print(f"username...{existing_user.username}")   
         if existing_user:
             raise HTTPException(status_code=400, detail="User already exists")
 
@@ -112,6 +113,9 @@ class AuthenticationService:
             password=hashed_password,
             permission=user_create.permission
         )
+        print(hashed_password)
+        print(db_user)
+
         db.add(db_user)
         await db.commit()
         await db.refresh(db_user)

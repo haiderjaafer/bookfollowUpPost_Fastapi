@@ -84,6 +84,8 @@ class BookFollowUpResponse(BaseModel):
     notes: Optional[str]= None
     currentDate: Optional[str]= None
     userID: Optional[int]= None
+    departmentName:Optional[str]= None
+    Com:Optional[str]= None
     countOfLateBooks: Optional[int]= None 
 
     class Config:
@@ -106,6 +108,7 @@ class BookFollowUpWithPDFResponseForUpdateByBookID(BaseModel):
     bookNo: Optional[str] = None
     bookDate: Optional[str] = None
     directoryName: Optional[str] = None
+    coID:Optional[int] = None
     deID:Optional[int] = None
     incomingNo: Optional[str] = None
     incomingDate: Optional[str] = None

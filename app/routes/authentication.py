@@ -133,7 +133,10 @@ async def register(
     Register a new user.
     """
     try:
+        # print(f"{user_create}")
         user = await AuthenticationService.create_user(db, user_create)
+
+        print(user)
 
         token = AuthenticationService.generate_jwt(
             user_id=user.id,
