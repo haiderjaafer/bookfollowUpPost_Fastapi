@@ -3,7 +3,7 @@ from datetime import datetime,timedelta, timezone
 from pathlib import Path
 import traceback
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, Form, Depends
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Form, Depends
 import pydantic
 from sqlalchemy import select,extract,func
 from sqlalchemy.ext.asyncio import AsyncSession  #  Use AsyncSession instead of sync Session
@@ -56,7 +56,9 @@ async def add_book_with_pdf(
     notes: str = Form(...),
     userID: str = Form(...),
     file: UploadFile = Form(...),
+    username: str = Form(),
     db: AsyncSession = Depends(get_async_db)
+    
 ):
     try:
         # Insert book
@@ -105,7 +107,7 @@ async def add_book_with_pdf(
         print(f"Inserted PDF record: {pdf_path}")
 
         # Delete original file (with delay)
-        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, file.filename)
+        scanner_path = os.path.join(settings.PDF_SOURCE_PATH,username, file.filename)
         print(f"Attempting to delete: {scanner_path}")
         if os.path.isfile(scanner_path):                                          # os.path.isfile(...) to ensure the file exists
            # delayed_delete(scanner_path, delay_sec=3)
@@ -377,7 +379,6 @@ async def get_pdf_file(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
     
 
-
 @bookFollowUpRouter.patch("/{id}", response_model=Dict[str, Any])
 async def update_book_with_pdf(
     id: int,
@@ -389,54 +390,48 @@ async def update_book_with_pdf(
     incomingDate: Optional[str] = Form(None),
     subject: Optional[str] = Form(None),
     destination: Optional[str] = Form(None),
-    deID: str = Form(...),
     bookAction: Optional[str] = Form(None),
     bookStatus: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
-    userID: Optional[str] = Form(None),
-    file: Optional[UploadFile] = Form(None),
+    userID: Optional[str] = Form(None),  # FIXED: Removed space in "userI  D"
+    username: Optional[str] = Form(None),  # FIXED: Changed from Form() to Form(None)
+    selectedCommittee: Optional[str] = Form(None),  # Added missing field
+    deID: Optional[str] = Form(None),  # Added missing field
+    file: Optional[UploadFile] = File(None),  # FIXED: Changed from Form(None) to File(None)
     db: AsyncSession = Depends(get_async_db)
 ):
     """
     Update a book record by ID with provided fields and optionally add a new PDF.
+    Args:
+        id: Path parameter for the book ID.
+        bookNo, bookDate, ...: Optional form fields to update.
+        userID: Optional user ID for book and PDF.
+        file: Optional PDF file to add.
+        db: Async SQLAlchemy session.
+    Returns:
+        JSON response with success message and updated book ID.
+    Raises:
+        HTTPException: For validation errors, missing book, or server errors.
     """
     try:
-        # Helper function to convert empty strings to None
-        def normalize_form_value(value):
-            if value is None or value == '' or value == 'null':
-                return None
-            return value
-
-        # Normalize all form values
-        bookNo = normalize_form_value(bookNo)
-        bookDate = normalize_form_value(bookDate)
-        bookType = normalize_form_value(bookType)
-        directoryName = normalize_form_value(directoryName)
-        incomingNo = normalize_form_value(incomingNo)
-        incomingDate = normalize_form_value(incomingDate)
-        subject = normalize_form_value(subject)
-        destination = normalize_form_value(destination)
-        bookAction = normalize_form_value(bookAction)
-        bookStatus = normalize_form_value(bookStatus)
-        notes = normalize_form_value(notes)
-        userID = normalize_form_value(userID)
-
-        # Validate at least one field is being updated (file is optional)
-        # Exclude deID from this check since it's required but might not be changing
-        updatable_fields = [bookNo, bookDate, bookType, directoryName, incomingNo,
-                           incomingDate, subject, destination, bookAction, bookStatus,
-                           notes, userID]
-                 
-        # Check if at least one updatable field has a value, or a file is being uploaded
-        has_field_update = any(v is not None for v in updatable_fields)
-        has_file_update = file is not None
+        logger.info(f"Updating book ID {id} with data: bookNo={bookNo}, userID={userID}, file={file.filename if file else None}")
         
-        if not has_field_update and not has_file_update:
-            raise HTTPException(
-                status_code=400, 
-                detail="At least one field must be updated or a file must be provided"
-            )
- 
+        # Validate at least one field or file is provided
+        form_fields = [
+            bookNo, bookDate, bookType, directoryName, incomingNo,
+            incomingDate, subject, destination, bookAction, bookStatus,
+            notes, userID, selectedCommittee, deID
+        ]
+        
+        # Check if we have a valid file
+        has_file = file is not None and hasattr(file, 'filename') and file.filename
+        
+        # Check if we have at least one form field with a value
+        has_form_data = any(v is not None and str(v).strip() != '' for v in form_fields)
+        
+        if not has_form_data and not has_file:
+            raise HTTPException(status_code=400, detail="At least one field or file must be provided")
+
         # Create book data model
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
@@ -447,35 +442,31 @@ async def update_book_with_pdf(
             incomingDate=incomingDate,
             subject=subject,
             destination=destination,
-            deID=deID,
             bookAction=bookAction,
             bookStatus=bookStatus,
             notes=notes,
             userID=int(userID) if userID else None,
+            selectedCommittee=int(selectedCommittee) if selectedCommittee else None,
+            deID=int(deID) if deID else None
         )
- 
-        # FIXED: Call service method with proper file handling
-        # Only pass file if it's actually uploaded and valid
-        file_to_pass = None
-        if file and file.filename and file.size > 0:
-            file_to_pass = file
-            logger.info(f"File '{file.filename}' will be uploaded for book ID {id}")
-        else:
-            logger.info(f"No valid file provided for book ID {id}")
-        
+
+        logger.debug(f"Book data created: {book_data}")
+
+        # Call service method
         updated_book_id = await BookFollowUpService.update_book(
             db,
             id,
             book_data,
-            file_to_pass,  # FIXED: Pass None if no valid file
-            int(userID) if userID else None
+            file if has_file else None,  # Only pass file if it's valid
+            int(userID) if userID else None,
+            username
         )
- 
+
         return {
             "message": "Book updated successfully",
             "bookID": updated_book_id
         }
- 
+
     except ValueError as e:
         logger.error(f"Invalid input for ID {id}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
@@ -486,7 +477,59 @@ async def update_book_with_pdf(
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
+# Alternative approach: Create a separate route for JSON updates
+@bookFollowUpRouter.patch("/{id}/json", response_model=Dict[str, Any])
+async def update_book_json(
+    id: int,
+    book_data: BookFollowUpCreate,  # Use a Pydantic model for JSON
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Update a book record by ID using JSON data (no file upload).
+    """
+    try:
+        logger.info(f"JSON update for book ID {id}: {book_data}")
+        
+        # Convert to BookFollowUpCreate
+        create_data = BookFollowUpCreate(**book_data.model_dump(exclude_none=True))
+        
+        # Call service method without file
+        updated_book_id = await BookFollowUpService.update_book(
+            db,
+            id,
+            create_data,
+            file=None,
+            user_id=book_data.userID,
+            username=None
+        )
 
+        return {
+            "message": "Book updated successfully",
+            "bookID": updated_book_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in JSON update for ID {id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+# You'll also need this Pydantic model
+# class BookFollowUpUpdate(pydantic.BaseModel):
+#     bookNo: Optional[str] = None
+#     bookDate: Optional[str] = None
+#     bookType: Optional[str] = None
+#     directoryName: Optional[str] = None
+#     incomingNo: Optional[str] = None
+#     incomingDate: Optional[str] = None
+#     subject: Optional[str] = None
+#     destination: Optional[str] = None
+#     bookAction: Optional[str] = None
+#     bookStatus: Optional[str] = None
+#     notes: Optional[str] = None
+#     userID: Optional[int] = None
+#     selectedCommittee: Optional[int] = None
+#     deID: Optional[int] = None
 
 
 @bookFollowUpRouter.get("/getBookFollowUpByBookID/{id}", response_model=BookFollowUpWithPDFResponseForUpdateByBookID)
@@ -582,16 +625,19 @@ async def delete_pdf(request: DeletePDFRequest, db: AsyncSession = Depends(get_a
 
 # Route to serve book.pdf
 @bookFollowUpRouter.get("/files/book")
-async def get_book_pdf():
+async def get_book_pdf(username: str = Query(..., description="Username for the PDF directory")):
     try:
-        logger.info("Handling request for book.pdf")
-        
-        # Construct file path
-        file_path: Path = settings.PDF_SOURCE_PATH / "book.pdf"
-        logger.info(f"Attempting to serve file: {file_path}")
+        logger.info(f"Handling request for book.pdf for username: {username}")
+                 
+        # Construct file path with username instead of hardcoded 'mmm'
+        file_path: Path = settings.PDF_SOURCE_PATH / username / "book.pdf"
+        # file_path: Path = r"\\\\10.20.11.33\\booksFollowUp\\pdfScanner\\{username}\\book.pdf"
+        logger.info(f"Attempting to serve file......: {file_path}")
         logger.info(f"PDF_SOURCE_PATH: {settings.PDF_SOURCE_PATH}")
+        logger.info(f"Username directory: {settings.PDF_SOURCE_PATH / username}")
         logger.info(f"Does PDF_SOURCE_PATH exist? {settings.PDF_SOURCE_PATH.exists()}")
         logger.info(f"Does PDF_SOURCE_PATH is dir? {settings.PDF_SOURCE_PATH.is_dir()}")
+        logger.info(f"Does username directory exist? {(settings.PDF_SOURCE_PATH / username).exists()}")
 
         # Validate PDF_SOURCE_PATH
         if not settings.PDF_SOURCE_PATH.exists():
@@ -599,6 +645,15 @@ async def get_book_pdf():
             raise HTTPException(
                 status_code=500,
                 detail=f"Server configuration error: PDF source path does not exist ({settings.PDF_SOURCE_PATH})"
+            )
+
+        # Validate username directory
+        username_dir = settings.PDF_SOURCE_PATH / username
+        if not username_dir.exists():
+            logger.error(f"Username directory does not exist: {username_dir}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"User directory not found: {username}"
             )
 
         # Ensure the filename is exactly 'book.pdf'
@@ -612,7 +667,7 @@ async def get_book_pdf():
             # Include file path in the error detail for debugging
             raise HTTPException(
                 status_code=404,
-                detail=f"لا يوجد ملف سكنر book.pdf في المسار: {file_path}"
+                detail=f"لا يوجد ملف سكنر book.pdf في المسار: {file_path} للمستخدم: {username}"
             )
 
         # Check file permissions
@@ -636,7 +691,7 @@ async def get_book_pdf():
                 raise HTTPException(status_code=400, detail="File is not a valid PDF")
 
         # Return the PDF file
-        logger.info(f"Successfully serving file: {file_path}")
+        logger.info(f"Successfully serving file: {file_path} for user: {username}")
         return FileResponse(
             path=file_path.as_posix(),
             media_type="application/pdf",
@@ -646,9 +701,8 @@ async def get_book_pdf():
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Server error while serving book.pdf: {str(e)}", exc_info=True)
+        logger.error(f"Server error while serving book.pdf for user {username}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
 
 
 

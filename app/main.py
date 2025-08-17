@@ -42,7 +42,13 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
     #  Enable CORS for frontend (e.g., Next.js or React app on port 3000)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000" ],  #  Update if your frontend is hosted elsewhere
+        allow_origins=[
+        
+        
+        "http://localhost:3000",  # Local Next.js
+        # "http://10.20.11.33:3000",  # server Production Next.js
+        
+    ],
         allow_credentials=True,
         # allow_methods=["*"],
         allow_methods=["GET", "POST", "PUT", "DELETE","PATCH", "OPTIONS"],

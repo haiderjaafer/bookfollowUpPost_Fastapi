@@ -50,7 +50,7 @@ class LateBookFollowUpService:
                 BookFollowUpTable.incomingNo,
                 BookFollowUpTable.incomingDate,
                 BookFollowUpTable.subject,
-                # BookFollowUpTable.destination,
+                BookFollowUpTable.destination,
                 BookFollowUpTable.bookAction,
                 BookFollowUpTable.bookStatus,
                 BookFollowUpTable.notes,
