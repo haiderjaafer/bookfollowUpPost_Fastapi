@@ -47,7 +47,7 @@ async def login(
         # Verify user credentials
         user = await AuthenticationService.verify_user(db, request.username, request.password)
 
-        print(f"user ... {user}")           
+        print(f"user .login,,,,,.. {user.permission}")           
         # # Generate JWT
         token = AuthenticationService.generate_jwt(
             user_id=user.id,
@@ -57,17 +57,7 @@ async def login(
 
         print(f"token ... {token}")  
         
-        # 🔥 CRITICAL: Cookie settings for browser compatibility
-        # response.set_cookie(
-        #     key="jwt_token",
-        #     value=token,
-        #     httponly=True,
-        #     secure=True,        # 🔥 Change this to False for HTTP (local/LAN)
-        #     samesite="lax",
-        #     max_age=60 * 60 * 24 * 30,
-        #     path="/",
-        #     # domain="10.20.11.100"  # 🔥 REMOVE — not needed unless using subdomains
-        # )
+   
 
         response.set_cookie(
             key="jwt_cookies_auth_token",
@@ -83,33 +73,11 @@ async def login(
 
 
 
-        # response.set_cookie(
-        #     key="jwt_cookies_auth_token",
-        #     value=token,
-        #     # httponly=False,           # Prevent JS access
-        #     # # secure=os.getenv("NODE_ENV") == "production",            # False for localhost HTTP
-        #     secure=False,
-        #     # samesite="none",          # Lax for cross-origin in development
-        #     max_age=60 * 60 * 24 * 30 ,    # 30 days
-        #     # # path="10.20.11.33",                # Available site-wide
-        #     # path="localhost"
-        #     # # 🔥 DO NOT set domain for localhost
-        #     # # domain="127.0.0.1"
-
-        #     domain="10.20.11.33" , # Add this!
-        #     httponly=True,
-        #     samesite="lax",      # IMPORTANT
-        #     # secure=True           # REQUIRED for cross-origin + samesite=none
-        # )
         
-        # Add explicit headers for debugging
-        # response.headers["Access-Control-Allow-Credentials"] = "true"
+    
         
-        # logger.info(f"Login successful for user: {user.username}")
-        # logger.debug(f"Cookie set: jwtToken (length: {len(token)})")
-        
-        return {"message": "Login successful", "user": {"id": user.id, "username": user.username}}
-        # return {"token":token}
+        return {"message": "Login successful", "user": {"id": user.id, "username": user.username,"permission":user.permission}}
+       
         
              
     except HTTPException as e:

@@ -37,6 +37,7 @@ class AuthenticationService:
             # Query user by username
             result = await db.execute(select(Users).where(Users.username == username))
             user = result.scalars().first()
+            print("user ....mmmmm", user.permission)
             
             if not user:
                 raise HTTPException(status_code=400, detail="Invalid username or password")
@@ -72,9 +73,11 @@ class AuthenticationService:
         payload = {
             "id": user_id,
             "username": username,
-            "isAdmin": permission == "admin" if permission else False,
+            "permission": permission,
             "exp": datetime.now() + timedelta(days=JWT_EXPIRE_DAYS)  # will add one month expiration from datetime.now()
         }
+
+        
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     
 
