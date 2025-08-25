@@ -74,7 +74,8 @@ class LateBookFollowUpService:
 
             # Step 4: Format response and calculate days late
             data = [
-                {
+                {   
+                    "serialNo": offset + i + 1,  # Auto-increment serial number based on pagination
                     "id": book.id,
                     "bookType": book.bookType,
                     "bookNo": book.bookNo,
@@ -96,7 +97,7 @@ class LateBookFollowUpService:
                     "departmentName": book.departmentName,
                     "pdfFiles": []  # Empty array to match BookFollowUpData
                 }
-                for book in late_books
+                for i, book in enumerate(late_books)  # Added enumerate to get index
             ]
 
             # Step 5: Response

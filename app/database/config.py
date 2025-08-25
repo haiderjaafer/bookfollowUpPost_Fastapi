@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     MODE: str
     jwt_secret: str
     node_env: str = Field("development", env="NODE_ENV")  # Ensure development mode
-
+    NODE_ENV: str = "development"  # add default
 
  
 

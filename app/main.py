@@ -45,8 +45,8 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
         allow_origins=[
         
         
-        "http://localhost:3000",  # Local Next.js
-        # "http://10.20.11.33:3000",  # server Production Next.js
+        # "http://localhost:3000",  # Local Next.js
+        "http://10.20.11.33:3000",  # server Production Next.js
         
     ],
         allow_credentials=True,

@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from typing import Optional
 from app.database.config import settings
 import logging
+from pathlib import Path
+from app.database.config import settings
 
 
 # Updated login route with proper cookie configuration
@@ -15,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-from app.database.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ async def login(
 
 
 
-from fastapi import HTTPException
+
 
 @router.post("/register")
 async def register(
@@ -98,39 +99,65 @@ async def register(
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Register a new user.
+    Register a new user and create their personal directory if it does not exist.
     """
     try:
-        # print(f"{user_create}")
+        # 1. Create user in DB
         user = await AuthenticationService.create_user(db, user_create)
 
-        print(user)
+        # 2. Build user directory path
+        base_dir = Path(settings.PDF_SOURCE_PATH)
+        # print("base_dir", base_dir)
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="PDF_SOURCE_PATH not configured.")
 
+        # user_dir = os.path.join(settings.PDF_SOURCE_PATH,  user.username)
+        user_dir = base_dir / f"{user.username}"
+        print("base_dir", user_dir)
+        if user_dir.exists():
+            print(f"Directory already exists for user {user.username}: {user_dir}")
+        else:
+            try:
+                user_dir.mkdir(parents=True, exist_ok=False)
+                print(f"Created directory for user {user.username}: {user_dir}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to create directory: {str(e)}")
+
+        # 3. Issue JWT token
         token = AuthenticationService.generate_jwt(
             user_id=user.id,
             username=user.username,
             permission=user.permission
         )
 
-        # Set HTTP-only cookie
+        # 4. Set JWT cookie
         response.set_cookie(
             key="jwt_cookies_auth_token",
             value=token,
             httponly=True,
-            secure=os.getenv("NODE_ENV") == "production",
+            secure=settings.NODE_ENV == "production",
             samesite="lax",
             max_age=60 * 60 * 24 * 30,  # 30 days
             path="/"
         )
 
-        return {"message": f"Authenticated {user.username}"}
+        return {
+            "success": True,
+            "message": f"User {user.username} registered successfully",
+            "directory": str(user_dir),
+        }
 
     except HTTPException:
-        # Re-raise HTTPExceptions from create_user without changing them -- this will getback detail if error occured
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
-    
+        raise HTTPException(status_code=500, detail=f"Failed to register user: {str(e)}")  
+
+
+
+
+
+
+
 
 @router.post("/logout")
 async def logout(response: Response):

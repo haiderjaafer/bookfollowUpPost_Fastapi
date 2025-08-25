@@ -186,7 +186,7 @@ class BookFollowUpService:
                 .outerjoin(Committee, Department.coID == Committee.coID)
                 .filter(*filters)
                 .distinct(BookFollowUpTable.bookNo)
-                .order_by(BookFollowUpTable.bookNo)
+                .order_by(BookFollowUpTable.id)
                 .offset(offset)
                 .limit(limit)
             )
@@ -224,6 +224,7 @@ class BookFollowUpService:
             # Step 6: Format data
             data = [
                 {
+                    "serialNo": offset + i + 1,
                     "id": row.id,
                     "bookType": row.bookType,
                     "bookNo": row.bookNo,
@@ -232,7 +233,7 @@ class BookFollowUpService:
                     "incomingNo": row.incomingNo,
                     "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
                     "subject": row.subject,
-                    "destination": row.destination,
+                    # "destination": row.destination,
                     "bookAction": row.bookAction,
                     "bookStatus": row.bookStatus.strip().lower() if row.bookStatus else None,
                     "notes": row.notes,
@@ -245,7 +246,7 @@ class BookFollowUpService:
                    
                     "pdfFiles": pdf_map.get(row.bookNo, [])
                 }
-                for row in book_rows
+                for i, row in enumerate(book_rows)
             ]
             logger.info(f"Fetched {len(data)} records with PDFs")
 
