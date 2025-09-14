@@ -14,24 +14,27 @@ class LateBookFollowUpService:
     async def getLateBooks(
         db: AsyncSession,
         page: int = 1,
-        limit: int = 10
+        limit: int = 10,
+        userID = int,
     ) -> Dict[str, Any]:
         """
         Retrieve late books (status 'قيد الانجاز', incomingDate within last 5 days) with pagination.
         Returns paginated data with total count, page, limit, total pages, and username.
         """
         try:
+            print(f"get late books per userID {userID}")
             # Get current date in +03:00 timezone
-            tz = timezone(timedelta(hours=3))
-            current_date = datetime.now(tz).date()
-            start_date = current_date - timedelta(days=5)
+            # tz = timezone(timedelta(hours=3))
+            # current_date = datetime.now(tz).date()
+            # start_date = current_date - timedelta(days=5)
 
             # Step 1: Count total records
             count_stmt = select(func.count()).select_from(
                 select(BookFollowUpTable.id).filter(
                     BookFollowUpTable.bookStatus == 'قيد الانجاز',
-                    cast(BookFollowUpTable.incomingDate, Date) >= start_date,
-                    cast(BookFollowUpTable.incomingDate, Date) <= current_date
+
+                    # cast(BookFollowUpTable.incomingDate, Date) >= start_date,
+                    # cast(BookFollowUpTable.incomingDate, Date) <= current_date
                 ).subquery()
             )
             count_result = await db.execute(count_stmt)
@@ -62,10 +65,11 @@ class LateBookFollowUpService:
                 Committee.Com
             ).outerjoin( Users, BookFollowUpTable.userID == Users.id ).outerjoin(Department, BookFollowUpTable.deID == Department.deID).outerjoin(Committee, Department.coID == Committee.coID).filter(
                 BookFollowUpTable.bookStatus == 'قيد الانجاز',
-                cast(BookFollowUpTable.incomingDate, Date) >= start_date,
-                cast(BookFollowUpTable.incomingDate, Date) <= current_date
+                BookFollowUpTable.userID == userID
+                # cast(BookFollowUpTable.incomingDate, Date) >= start_date,
+                # cast(BookFollowUpTable.incomingDate, Date) <= current_date
             ).order_by(
-                BookFollowUpTable.incomingDate.asc()
+                BookFollowUpTable.currentDate.desc()
             ).offset(offset).limit(limit)
 
             # Execute query
@@ -88,7 +92,7 @@ class LateBookFollowUpService:
                     "bookAction": book.bookAction,
                     "bookStatus": book.bookStatus,
                     "notes": book.notes,
-                    "countOfLateBooks": (current_date - book.incomingDate).days if book.incomingDate else 0,
+                    # "countOfLateBooks": (current_date - book.incomingDate).days if book.incomingDate else 0,
                     "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
                     "userID": book.userID,
                     "username": book.username,

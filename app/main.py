@@ -22,7 +22,9 @@ from app.routes.authentication import router
 async def lifespan(app: FastAPI):
     if settings.MODE.upper() == "DEVELOPMENT":  # Ensures dev mode is case-insensitive
         print("🌱 DEVELOPMENT mode: creating database tables...")
-        Base.metadata.create_all(bind=engine)  # Create tables from models
+        # Fixed: Use async method for table creation
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     else:
         print("🚀 PRODUCTION mode: skipping table creation.")
 
@@ -45,8 +47,8 @@ def create_app() -> FastAPI:              #create_app() just defines a factory f
         allow_origins=[
         
         
-        # "http://localhost:3000",  # Local Next.js
-        "http://10.20.11.33:3000",  # server Production Next.js
+         "http://localhost:3000",  # Local Next.js
+        # "http://10.20.11.33:3000",  # server Production Next.js
         
     ],
         allow_credentials=True,

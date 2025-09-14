@@ -290,13 +290,14 @@ async def check_order_exists(
 async def get_late_books(
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     limit: int = Query(10, ge=1, le=100, description="Records per page"),
+    userID: int = Query(1, description="get late books per userID"),
     db: AsyncSession = Depends(get_async_db)
 ):
     """
     Retrieve late books (status 'قيد الانجاز', incomingDate within last 5 days) with pagination.
     Returns paginated data with total count, page, limit, and total pages.
     """
-    return await LateBookFollowUpService.getLateBooks(db, page, limit)
+    return await LateBookFollowUpService.getLateBooks(db, page, limit,userID)
 
 
 
