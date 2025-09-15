@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from typing import Optional
 from app.database.config import settings
 import logging
+from pathlib import Path
+from app.database.config import settings
 
 
 # Updated login route with proper cookie configuration
@@ -15,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-from app.database.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ async def login(
         # Verify user credentials
         user = await AuthenticationService.verify_user(db, request.username, request.password)
 
-        print(f"user ... {user}")           
+        print(f"user .login,,,,,.. {user.permission}")           
         # # Generate JWT
         token = AuthenticationService.generate_jwt(
             user_id=user.id,
@@ -57,17 +58,7 @@ async def login(
 
         print(f"token ... {token}")  
         
-        # 🔥 CRITICAL: Cookie settings for browser compatibility
-        # response.set_cookie(
-        #     key="jwt_token",
-        #     value=token,
-        #     httponly=True,
-        #     secure=True,        # 🔥 Change this to False for HTTP (local/LAN)
-        #     samesite="lax",
-        #     max_age=60 * 60 * 24 * 30,
-        #     path="/",
-        #     # domain="10.20.11.100"  # 🔥 REMOVE — not needed unless using subdomains
-        # )
+   
 
         response.set_cookie(
             key="jwt_cookies_auth_token",
@@ -83,33 +74,11 @@ async def login(
 
 
 
-        # response.set_cookie(
-        #     key="jwt_cookies_auth_token",
-        #     value=token,
-        #     # httponly=False,           # Prevent JS access
-        #     # # secure=os.getenv("NODE_ENV") == "production",            # False for localhost HTTP
-        #     secure=False,
-        #     # samesite="none",          # Lax for cross-origin in development
-        #     max_age=60 * 60 * 24 * 30 ,    # 30 days
-        #     # # path="10.20.11.33",                # Available site-wide
-        #     # path="localhost"
-        #     # # 🔥 DO NOT set domain for localhost
-        #     # # domain="127.0.0.1"
-
-        #     domain="10.20.11.33" , # Add this!
-        #     httponly=True,
-        #     samesite="lax",      # IMPORTANT
-        #     # secure=True           # REQUIRED for cross-origin + samesite=none
-        # )
         
-        # Add explicit headers for debugging
-        # response.headers["Access-Control-Allow-Credentials"] = "true"
+    
         
-        # logger.info(f"Login successful for user: {user.username}")
-        # logger.debug(f"Cookie set: jwtToken (length: {len(token)})")
-        
-        return {"message": "Login successful", "user": {"id": user.id, "username": user.username}}
-        # return {"token":token}
+        return {"message": "Login successful", "user": {"id": user.id, "username": user.username,"permission":user.permission}}
+       
         
              
     except HTTPException as e:
@@ -121,7 +90,7 @@ async def login(
 
 
 
-from fastapi import HTTPException
+
 
 @router.post("/register")
 async def register(
@@ -130,39 +99,65 @@ async def register(
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Register a new user.
+    Register a new user and create their personal directory if it does not exist.
     """
     try:
-        # print(f"{user_create}")
+        # 1. Create user in DB
         user = await AuthenticationService.create_user(db, user_create)
 
-        print(user)
+        # 2. Build user directory path
+        base_dir = Path(settings.PDF_SOURCE_PATH)
+        # print("base_dir", base_dir)
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="PDF_SOURCE_PATH not configured.")
 
+        # user_dir = os.path.join(settings.PDF_SOURCE_PATH,  user.username)
+        user_dir = base_dir / f"{user.username}"
+        print("base_dir", user_dir)
+        if user_dir.exists():
+            print(f"Directory already exists for user {user.username}: {user_dir}")
+        else:
+            try:
+                user_dir.mkdir(parents=True, exist_ok=False)
+                print(f"Created directory for user {user.username}: {user_dir}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to create directory: {str(e)}")
+
+        # 3. Issue JWT token
         token = AuthenticationService.generate_jwt(
             user_id=user.id,
             username=user.username,
             permission=user.permission
         )
 
-        # Set HTTP-only cookie
+        # 4. Set JWT cookie
         response.set_cookie(
             key="jwt_cookies_auth_token",
             value=token,
             httponly=True,
-            secure=os.getenv("NODE_ENV") == "production",
+            secure=settings.NODE_ENV == "production",
             samesite="lax",
             max_age=60 * 60 * 24 * 30,  # 30 days
             path="/"
         )
 
-        return {"message": f"Authenticated {user.username}"}
+        return {
+            "success": True,
+            "message": f"User {user.username} registered successfully",
+            "directory": str(user_dir),
+        }
 
     except HTTPException:
-        # Re-raise HTTPExceptions from create_user without changing them -- this will getback detail if error occured
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
-    
+        raise HTTPException(status_code=500, detail=f"Failed to register user: {str(e)}")  
+
+
+
+
+
+
+
 
 @router.post("/logout")
 async def logout(response: Response):
