@@ -8,6 +8,17 @@ from app.models.architecture.department import Department
 from app.models.bookFollowUpTable import BookFollowUpTable
 from app.models.users import Users
 
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
+if not logger.handlers:  # Avoid duplicate handlers
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+
 class LateBookFollowUpService:
 
     @staticmethod
@@ -15,33 +26,46 @@ class LateBookFollowUpService:
         db: AsyncSession,
         page: int = 1,
         limit: int = 10,
-        userID = int,
+        userID: int = None,
     ) -> Dict[str, Any]:
         """
-        Retrieve late books (status 'قيد الانجاز', incomingDate within last 5 days) with pagination.
+        Retrieve late books (status 'قيد الانجاز') with pagination filtered by userID.
         Returns paginated data with total count, page, limit, total pages, and username.
         """
         try:
-            print(f"get late books per userID {userID}")
-            # Get current date in +03:00 timezone
-            # tz = timezone(timedelta(hours=3))
-            # current_date = datetime.now(tz).date()
-            # start_date = current_date - timedelta(days=5)
+            logger.info(f"Getting late books for userID: {userID}, page: {page}, limit: {limit}")
+            
+            # Validate userID
+            if not userID:
+                raise HTTPException(status_code=400, detail="userID is required")
 
-            # Step 1: Count total records
-            count_stmt = select(func.count()).select_from(
-                select(BookFollowUpTable.id).filter(
-                    BookFollowUpTable.bookStatus == 'قيد الانجاز',
+            # Base filter conditions
+            base_filters = [
+                BookFollowUpTable.bookStatus == 'قيد الانجاز',
+                BookFollowUpTable.userID == userID  # Apply userID filter to count as well
+            ]
 
-                    # cast(BookFollowUpTable.incomingDate, Date) >= start_date,
-                    # cast(BookFollowUpTable.incomingDate, Date) <= current_date
-                ).subquery()
-            )
+            # Step 1: Count total records WITH userID filter applied
+            count_stmt = select(func.count(BookFollowUpTable.id)).filter(*base_filters)
             count_result = await db.execute(count_stmt)
             total = count_result.scalar() or 0
+            
+            logger.info(f"Total late books for userID {userID}: {total}")
 
-            # Step 2: Calculate offset
+            # Step 2: Calculate offset and validate page
             offset = (page - 1) * limit
+            total_pages = (total + limit - 1) // limit if total > 0 else 1
+            
+            # Validate page number
+            if page > total_pages and total > 0:
+                logger.warning(f"Page {page} exceeds total pages {total_pages}")
+                return {
+                    "data": [],
+                    "total": total,
+                    "page": page,
+                    "limit": limit,
+                    "totalPages": total_pages
+                }
 
             # Step 3: Build query for paginated data with username
             query = select(
@@ -63,11 +87,14 @@ class LateBookFollowUpService:
                 BookFollowUpTable.deID,
                 Department.departmentName,
                 Committee.Com
-            ).outerjoin( Users, BookFollowUpTable.userID == Users.id ).outerjoin(Department, BookFollowUpTable.deID == Department.deID).outerjoin(Committee, Department.coID == Committee.coID).filter(
-                BookFollowUpTable.bookStatus == 'قيد الانجاز',
-                BookFollowUpTable.userID == userID
-                # cast(BookFollowUpTable.incomingDate, Date) >= start_date,
-                # cast(BookFollowUpTable.incomingDate, Date) <= current_date
+            ).outerjoin(
+                Users, BookFollowUpTable.userID == Users.id
+            ).outerjoin(
+                Department, BookFollowUpTable.deID == Department.deID
+            ).outerjoin(
+                Committee, Department.coID == Committee.coID
+            ).filter(
+                *base_filters  # Apply same filters as count query
             ).order_by(
                 BookFollowUpTable.currentDate.desc()
             ).offset(offset).limit(limit)
@@ -76,7 +103,9 @@ class LateBookFollowUpService:
             result = await db.execute(query)
             late_books = result.fetchall()
 
-            # Step 4: Format response and calculate days late
+            logger.info(f"Retrieved {len(late_books)} records for page {page}")
+
+            # Step 4: Format response
             data = [
                 {   
                     "serialNo": offset + i + 1,  # Auto-increment serial number based on pagination
@@ -88,11 +117,10 @@ class LateBookFollowUpService:
                     "incomingNo": book.incomingNo,
                     "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,
                     "subject": book.subject,
-                    # "destination": book.destination,
+                    "destination": book.destination,
                     "bookAction": book.bookAction,
                     "bookStatus": book.bookStatus,
                     "notes": book.notes,
-                    # "countOfLateBooks": (current_date - book.incomingDate).days if book.incomingDate else 0,
                     "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
                     "userID": book.userID,
                     "username": book.username,
@@ -101,18 +129,23 @@ class LateBookFollowUpService:
                     "departmentName": book.departmentName,
                     "pdfFiles": []  # Empty array to match BookFollowUpData
                 }
-                for i, book in enumerate(late_books)  # Added enumerate to get index
+                for i, book in enumerate(late_books)
             ]
 
-            # Step 5: Response
-            print(f"Fetched {len(data)} late books, Total: {total}, Page: {page}, Limit: {limit}")
-            return {
+            # Step 5: Response with proper pagination info
+            response = {
                 "data": data,
                 "total": total,
                 "page": page,
                 "limit": limit,
-                "totalPages": (total + limit - 1) // limit
+                "totalPages": total_pages
             }
+            
+            logger.info(f"Response: {len(data)} records, Total: {total}, Page: {page}/{total_pages}")
+            return response
+            
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"Error fetching late books: {str(e)}")
+            logger.error(f"Error fetching late books: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

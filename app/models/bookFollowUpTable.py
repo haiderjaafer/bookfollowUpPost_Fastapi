@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Date,Unicode
 from app.database.database import Base
 
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -156,5 +156,9 @@ class BookStatusCounts(BaseModel):
 class UserBookCount(BaseModel):
     username: str
     bookCount: int
+
+class SubjectRequest(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=500, description="Subject to search for")
+    
 
 

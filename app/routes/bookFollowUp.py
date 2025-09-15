@@ -16,7 +16,7 @@ from app.services.pdf_service import PDFService
 from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server  #  Responsible for saving the uploaded file
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
-from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, UserBookCount
+from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, SubjectRequest, UserBookCount
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 from app.services.lateBooks import LateBookFollowUpService
@@ -283,7 +283,6 @@ async def check_order_exists(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-
 @bookFollowUpRouter.get("/lateBooks", response_model=Dict[str, Any])
 async def get_late_books(
     page: int = Query(1, ge=1, description="Page number (1-based)"),
@@ -292,12 +291,19 @@ async def get_late_books(
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Retrieve late books (status 'قيد الانجاز', incomingDate within last 5 days) with pagination.
+    Retrieve late books (status 'قيد الانجاز') with pagination filtered by userID.
     Returns paginated data with total count, page, limit, and total pages.
     """
-    return await LateBookFollowUpService.getLateBooks(db, page, limit,userID)
-
-
+    try:
+        logger.info(f"GET /lateBooks - userID: {userID}, page: {page}, limit: {limit}")
+        result = await LateBookFollowUpService.getLateBooks(db, page, limit, userID)
+        logger.info(f"Route response: {len(result.get('data', []))} records")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_late_books route: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @bookFollowUpRouter.get("/pdf/{book_no}", response_model=List[PDFResponse])
@@ -801,17 +807,32 @@ async def get_department_names_by_coID(coID: int, db: AsyncSession = Depends(get
 
 
 
-@bookFollowUpRouter.get("/getRecordBySubject", response_model=Dict[str, Any])
+# @bookFollowUpRouter.post("/getRecordBySubject", response_model=Dict[str, Any])
+# async def getRecordBySubjectFunction(
+#     request: Request,
+#     subject: Optional[str] = Query(None),
+#     db: AsyncSession = Depends(get_async_db),
+# ) -> Dict[str, Any]:
+#     if subject:
+#         decoded_subject = unquote(subject)
+#     #     print(f" subject .......... {decoded_subject}")
+#     #     return decoded_subject
+#     # return "No subject provided"
+
+#     logger.info(f"Received request for subject: {subject}")
+#     return await BookFollowUpService.getRecordBySubject(db, subject)
+
+
+
+@bookFollowUpRouter.post("/getRecordBySubject", response_model=Dict[str, Any])
 async def getRecordBySubjectFunction(
-    request: Request,
-    subject: Optional[str] = Query(None),
+    request: SubjectRequest,
     db: AsyncSession = Depends(get_async_db),
 ) -> Dict[str, Any]:
-    if subject:
-        decoded_subject = unquote(subject)
-    #     print(f" subject .......... {decoded_subject}")
-    #     return decoded_subject
-    # return "No subject provided"
-
-    logger.info(f"Received request for subject: {subject}")
-    return await BookFollowUpService.getRecordBySubject(db, subject)
+    try:
+        logger.info(f"Received POST request for subject: {request.subject}")
+        logger.info(f"Subject length: {len(request.subject)}")
+        return await BookFollowUpService.getRecordBySubject(db, request.subject)
+    except Exception as e:
+        logger.error(f"Error in POST getRecordBySubject: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

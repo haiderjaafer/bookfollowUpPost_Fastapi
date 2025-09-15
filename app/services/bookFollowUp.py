@@ -16,7 +16,8 @@ from fastapi import HTTPException, Request, UploadFile
 from app.models.users import Users
 from app.services.pdf_service import PDFService
 from app.database.config import settings
-
+from difflib import SequenceMatcher
+from sqlalchemy import or_, func
 import logging
 
 # Configure logger
@@ -652,89 +653,113 @@ class BookFollowUpService:
             print(f"Error in get_user_book_counts: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered UserBookCount.")   
 
+     
 
-
- 
     @staticmethod
     async def getRecordBySubject(
         db: AsyncSession,
         subject: Optional[str] = None
     ) -> Dict[str, Any]:
         try:
-            # Step 1: Validate input
             if not subject:
-                logger.warning("No subject provided in query")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Subject query parameter is required"
-                )
+                raise HTTPException(status_code=400, detail="Subject is required")
 
-            # Decode URL-encoded subject
             decoded_subject = unquote(subject).strip()
-            logger.info(f"Decoded subject: {decoded_subject}")
+            logger.info(f"Searching for subject: {decoded_subject}")
 
-            # Additional validation
-            if len(decoded_subject) < 1:
-                logger.error("Subject is empty after decoding")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Subject cannot be empty"
-                )
-            if len(decoded_subject) > 255:  # Adjust based on your schema
-                logger.error(f"Subject too long: {len(decoded_subject)} characters")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Subject exceeds maximum length of 255 characters"
-                )
-            if any(char in decoded_subject for char in [';', '--', '/*', '*/']):
-                logger.error(f"Invalid characters in subject: {decoded_subject}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Subject contains invalid characters"
-                )
-
-            # Step 2: Query for the first matching record with user and PDF count
-            # Use a subquery for countOfPDFs to avoid GROUP BY issues
+            # Step 1: Try exact match first
             pdf_count_subquery = (
-                select(func.count(PDFTable.id).label("countOfPDFs"))
+                select(func.count(PDFTable.id))
                 .where(PDFTable.bookID == BookFollowUpTable.id)
-                .correlate(BookFollowUpTable)
                 .scalar_subquery()
             )
 
-            stmt = (
-                select(
-                    BookFollowUpTable,
-                    Users.username,
-                    pdf_count_subquery.label("countOfPDFs")
-                )
+            exact_stmt = (
+                select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
                 .where(BookFollowUpTable.subject == decoded_subject)
-                .limit(1)  # SQL Server: TOP 1
             )
-            logger.debug(f"Executing query: {stmt}")
-            result = await db.execute(stmt)
-            record = result.first()
+            
+            result = await db.execute(exact_stmt)
+            records = result.all()
+            
+            # Step 2: If no exact match, try fuzzy matching
+            if not records:
+                logger.info(f"No exact match found, trying fuzzy search for: {decoded_subject}")
+                
+                # Get all subjects for fuzzy matching
+                all_subjects_stmt = select(BookFollowUpTable.subject).distinct()
+                all_subjects_result = await db.execute(all_subjects_stmt)
+                all_subjects = [row[0] for row in all_subjects_result.all() if row[0]]
+                
+                # Find best matches using fuzzy matching
+                best_matches = []
+                for db_subject in all_subjects:
+                    similarity = SequenceMatcher(None, decoded_subject.lower(), db_subject.lower()).ratio()
+                    if similarity > 0.8:  # 80% similarity threshold
+                        best_matches.append((db_subject, similarity))
+                
+                # Sort by similarity and get the best match
+                if best_matches:
+                    best_matches.sort(key=lambda x: x[1], reverse=True)
+                    best_subject = best_matches[0][0]
+                    logger.info(f"Found fuzzy match: '{best_subject}' with similarity: {best_matches[0][1]:.2f}")
+                    
+                    # Query with the best matching subject
+                    fuzzy_stmt = (
+                        select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
+                        .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                        .where(BookFollowUpTable.subject == best_subject)
+                    )
+                    result = await db.execute(fuzzy_stmt)
+                    records = result.all()
 
-            if record is None:
-                logger.info(f"No record found for subject: {decoded_subject}")
+            # Step 3: If still no match, try partial matching
+            if not records:
+                logger.info(f"No fuzzy match found, trying partial search")
+                
+                # Extract key words (remove common Arabic words)
+                common_words = ['من', 'في', 'على', 'إلى', 'عن', 'مع', 'لل', 'ال', 'و', 'أو']
+                search_words = [word for word in decoded_subject.split() if len(word) > 2 and word not in common_words]
+                
+                if search_words:
+                    # Create LIKE conditions for each significant word
+                    conditions = []
+                    for word in search_words[:5]:  # Limit to first 5 significant words
+                        conditions.append(BookFollowUpTable.subject.ilike(f'%{word}%'))
+                    
+                    partial_stmt = (
+                        select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
+                        .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                        .where(or_(*conditions))
+                    )
+                    result = await db.execute(partial_stmt)
+                    records = result.all()
+
+            if not records:
+                # Log available subjects for debugging
+                debug_stmt = select(BookFollowUpTable.subject).limit(10)
+                debug_result = await db.execute(debug_stmt)
+                available_subjects = [row[0] for row in debug_result.all()]
+                logger.info(f"Available subjects (first 10): {available_subjects}")
+                
                 raise HTTPException(
-                    status_code=404,
-                    detail=f"No record found for subject: {decoded_subject}"
+                    status_code=404, 
+                    detail=f"No record found for subject: {decoded_subject[:100]}..."
                 )
 
-            book_followup, username, count_of_pdfs = record
+            # Rest of your processing code remains the same...
+            response_array = []
+            for record in records:
+                book_followup, username, count_of_pdfs = record
+                
+                # Get PDFs for this book
+                pdf_stmt = select(PDFTable).where(PDFTable.bookID == book_followup.id)
+                pdf_result = await db.execute(pdf_stmt)
+                pdfs = pdf_result.scalars().all()
 
-            # Step 3: Fetch associated PDFs
-            pdf_stmt = (
-                select(PDFTable)
-                .where(PDFTable.bookID == book_followup.id)
-            )
-            pdf_result = await db.execute(pdf_stmt)
-            pdfs = pdf_result.scalars().all()
-
-            # Step 4: Format response
-            response = BookFollowUpWithPDFResponseForUpdateByBookID(
+                # Build response
+                response = BookFollowUpWithPDFResponseForUpdateByBookID(
                 id=book_followup.id,
                 bookType=book_followup.bookType,
                 bookNo=book_followup.bookNo,
@@ -765,16 +790,145 @@ class BookFollowUpService:
                 ]
             )
 
-            logger.info(f"Found record with ID: {book_followup.id} for subject: {decoded_subject}")
-            return {
-                "data":response
-            }
+            response_array.append(response)
+
+
+            return {"data": response_array}
 
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error in getRecordBySubject: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail="Internal server error while fetching record"
-            )
+            raise HTTPException(status_code=500, detail="Internal server error") 
+     
+
+
+ 
+    # @staticmethod
+    # async def getRecordBySubject(
+    #     db: AsyncSession,
+    #     subject: Optional[str] = None
+    # ) -> Dict[str, Any]:
+    #     try:
+    #         # Step 1: Validate input
+    #         if not subject:
+    #             logger.warning("No subject provided in query")
+    #             raise HTTPException(
+    #                 status_code=400,
+    #                 detail="Subject query parameter is required"
+    #             )
+
+    #         # Decode URL-encoded subject
+    #         decoded_subject = unquote(subject).strip()
+    #         logger.info(f"Decoded subject: {decoded_subject}")
+
+    #         # Additional validation
+    #         if len(decoded_subject) < 1:
+    #             logger.error("Subject is empty after decoding")
+    #             raise HTTPException(
+    #                 status_code=400,
+    #                 detail="Subject cannot be empty"
+    #             )
+    #         if len(decoded_subject) > 500:  # Adjust based on your schema
+    #             logger.error(f"Subject too long: {len(decoded_subject)} characters")
+    #             raise HTTPException(
+    #                 status_code=400,
+    #                 detail="Subject exceeds maximum length of 255 characters"
+    #             )
+    #         # if any(char in decoded_subject for char in [';', '--', '/*', '*/']):
+    #         #     logger.error(f"Invalid characters in subject: {decoded_subject}")
+    #         #     raise HTTPException(
+    #         #         status_code=400,
+    #         #         detail="Subject contains invalid characters"
+    #         #     )
+
+    #         # Step 2: Query for the first matching record with user and PDF count
+    #         # Use a subquery for countOfPDFs to avoid GROUP BY issues
+    #         pdf_count_subquery = (
+    #             select(func.count(PDFTable.id).label("countOfPDFs"))
+    #             .where(PDFTable.bookID == BookFollowUpTable.id)
+    #             .correlate(BookFollowUpTable)
+    #             .scalar_subquery()
+    #         )
+
+    #         stmt = (
+    #             select(
+    #                 BookFollowUpTable,
+    #                 Users.username,
+    #                 pdf_count_subquery.label("countOfPDFs")
+    #             )
+    #             .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+    #             .where(BookFollowUpTable.subject == decoded_subject)
+    #             # .limit(1)  # SQL Server: TOP 1
+    #         )
+    #         logger.debug(f"Executing query: {stmt}")
+    #         result = await db.execute(stmt)
+    #         record = result.first()
+
+    #         if record is None:
+    #             logger.info(f"No record found for subject: {decoded_subject}")
+    #             raise HTTPException(
+    #                 status_code=404,
+    #                 detail=f"No record found for subject: {decoded_subject}"
+    #             )
+
+    #         book_followup, username, count_of_pdfs = record
+
+    #         # Step 3: Fetch associated PDFs
+    #         pdf_stmt = (
+    #             select(PDFTable)
+    #             .where(PDFTable.bookID == book_followup.id)
+    #         )
+    #         pdf_result = await db.execute(pdf_stmt)
+    #         pdfs = pdf_result.scalars().all()
+
+    #         # Step 4: Format response
+    #         response_array = []
+
+    #         response = BookFollowUpWithPDFResponseForUpdateByBookID(
+    #             id=book_followup.id,
+    #             bookType=book_followup.bookType,
+    #             bookNo=book_followup.bookNo,
+    #             bookDate=book_followup.bookDate.strftime("%Y-%m-%d") if book_followup.bookDate else None,
+    #             directoryName=book_followup.directoryName,
+    #             # coID=book_followup.coID,
+    #             deID=book_followup.deID,
+    #             incomingNo=book_followup.incomingNo,
+    #             incomingDate=book_followup.incomingDate.strftime("%Y-%m-%d") if book_followup.incomingDate else None,
+    #             subject=book_followup.subject,
+    #             destination=book_followup.destination,
+    #             bookAction=book_followup.bookAction,
+    #             bookStatus=book_followup.bookStatus,
+    #             notes=book_followup.notes,
+    #             currentDate=book_followup.currentDate.strftime("%Y-%m-%d") if book_followup.currentDate else None,
+    #             userID=book_followup.userID,
+    #             username=username,
+    #             countOfPDFs=count_of_pdfs,
+    #             pdfFiles=[
+    #                 PDFResponse(
+    #                     id=pdf.id,
+    #                     bookNo=pdf.bookNo,
+    #                     pdf=pdf.pdf,
+    #                     currentDate=pdf.currentDate.strftime("%Y-%m-%d") if pdf.currentDate else None,
+    #                     username=username
+    #                 )
+    #                 for pdf in pdfs
+    #             ]
+    #         )
+
+    #         response_array.append(response)
+
+
+    #         logger.info(f"Found record with ID: {book_followup.id} for subject: {decoded_subject}")
+    #         return {
+    #             "data":response_array
+    #         }
+
+    #     except HTTPException:
+    #         raise
+    #     except Exception as e:
+    #         logger.error(f"Error in getRecordBySubject: {str(e)}", exc_info=True)
+    #         raise HTTPException(
+    #             status_code=500,
+    #             detail="Internal server error while fetching record"
+    #         )
