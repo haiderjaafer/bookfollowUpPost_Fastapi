@@ -2,6 +2,7 @@ import asyncio
 from datetime import date, datetime
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -649,4 +650,131 @@ class BookFollowUpService:
             return [UserBookCount(username=row.username, bookCount=row.bookCount) for row in rows]
         except Exception as e:
             print(f"Error in get_user_book_counts: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error retrieving filtered UserBookCount.")       
+            raise HTTPException(status_code=500, detail="Error retrieving filtered UserBookCount.")   
+
+
+
+ 
+    @staticmethod
+    async def getRecordBySubject(
+        db: AsyncSession,
+        subject: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            # Step 1: Validate input
+            if not subject:
+                logger.warning("No subject provided in query")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subject query parameter is required"
+                )
+
+            # Decode URL-encoded subject
+            decoded_subject = unquote(subject).strip()
+            logger.info(f"Decoded subject: {decoded_subject}")
+
+            # Additional validation
+            if len(decoded_subject) < 1:
+                logger.error("Subject is empty after decoding")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subject cannot be empty"
+                )
+            if len(decoded_subject) > 255:  # Adjust based on your schema
+                logger.error(f"Subject too long: {len(decoded_subject)} characters")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subject exceeds maximum length of 255 characters"
+                )
+            if any(char in decoded_subject for char in [';', '--', '/*', '*/']):
+                logger.error(f"Invalid characters in subject: {decoded_subject}")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subject contains invalid characters"
+                )
+
+            # Step 2: Query for the first matching record with user and PDF count
+            # Use a subquery for countOfPDFs to avoid GROUP BY issues
+            pdf_count_subquery = (
+                select(func.count(PDFTable.id).label("countOfPDFs"))
+                .where(PDFTable.bookID == BookFollowUpTable.id)
+                .correlate(BookFollowUpTable)
+                .scalar_subquery()
+            )
+
+            stmt = (
+                select(
+                    BookFollowUpTable,
+                    Users.username,
+                    pdf_count_subquery.label("countOfPDFs")
+                )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .where(BookFollowUpTable.subject == decoded_subject)
+                .limit(1)  # SQL Server: TOP 1
+            )
+            logger.debug(f"Executing query: {stmt}")
+            result = await db.execute(stmt)
+            record = result.first()
+
+            if record is None:
+                logger.info(f"No record found for subject: {decoded_subject}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No record found for subject: {decoded_subject}"
+                )
+
+            book_followup, username, count_of_pdfs = record
+
+            # Step 3: Fetch associated PDFs
+            pdf_stmt = (
+                select(PDFTable)
+                .where(PDFTable.bookID == book_followup.id)
+            )
+            pdf_result = await db.execute(pdf_stmt)
+            pdfs = pdf_result.scalars().all()
+
+            # Step 4: Format response
+            response = BookFollowUpWithPDFResponseForUpdateByBookID(
+                id=book_followup.id,
+                bookType=book_followup.bookType,
+                bookNo=book_followup.bookNo,
+                bookDate=book_followup.bookDate.strftime("%Y-%m-%d") if book_followup.bookDate else None,
+                directoryName=book_followup.directoryName,
+                # coID=book_followup.coID,
+                deID=book_followup.deID,
+                incomingNo=book_followup.incomingNo,
+                incomingDate=book_followup.incomingDate.strftime("%Y-%m-%d") if book_followup.incomingDate else None,
+                subject=book_followup.subject,
+                destination=book_followup.destination,
+                bookAction=book_followup.bookAction,
+                bookStatus=book_followup.bookStatus,
+                notes=book_followup.notes,
+                currentDate=book_followup.currentDate.strftime("%Y-%m-%d") if book_followup.currentDate else None,
+                userID=book_followup.userID,
+                username=username,
+                countOfPDFs=count_of_pdfs,
+                pdfFiles=[
+                    PDFResponse(
+                        id=pdf.id,
+                        bookNo=pdf.bookNo,
+                        pdf=pdf.pdf,
+                        currentDate=pdf.currentDate.strftime("%Y-%m-%d") if pdf.currentDate else None,
+                        username=username
+                    )
+                    for pdf in pdfs
+                ]
+            )
+
+            logger.info(f"Found record with ID: {book_followup.id} for subject: {decoded_subject}")
+            return {
+                "data":response
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in getRecordBySubject: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error while fetching record"
+            )

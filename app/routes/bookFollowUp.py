@@ -14,17 +14,15 @@ from app.models.users import Users
 from app.services.bookFollowUp import BookFollowUpService
 from app.services.pdf_service import PDFService
 from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server  #  Responsible for saving the uploaded file
-import os
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, UserBookCount
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 from app.services.lateBooks import LateBookFollowUpService
-
 from fastapi.responses import FileResponse
 import os
-
+from urllib.parse import unquote
 import logging
 
 # Configure logger
@@ -290,7 +288,7 @@ async def check_order_exists(
 async def get_late_books(
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     limit: int = Query(10, ge=1, le=100, description="Records per page"),
-    userID: int = Query(1, description="get late books per userID"),
+    userID: int = Query(..., description="get late books per userID"),
     db: AsyncSession = Depends(get_async_db)
 ):
     """
@@ -799,3 +797,21 @@ async def get_department_names_by_coID(coID: int, db: AsyncSession = Depends(get
     except Exception as e:
         logger.error(f"Error fetching department names for coID {coID}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+
+@bookFollowUpRouter.get("/getRecordBySubject", response_model=Dict[str, Any])
+async def getRecordBySubjectFunction(
+    request: Request,
+    subject: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+) -> Dict[str, Any]:
+    if subject:
+        decoded_subject = unquote(subject)
+    #     print(f" subject .......... {decoded_subject}")
+    #     return decoded_subject
+    # return "No subject provided"
+
+    logger.info(f"Received request for subject: {subject}")
+    return await BookFollowUpService.getRecordBySubject(db, subject)
