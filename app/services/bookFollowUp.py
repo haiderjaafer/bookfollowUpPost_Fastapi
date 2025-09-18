@@ -11,7 +11,7 @@ from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.architecture.committees import Committee
 from app.models.architecture.department import Department
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, UserBookCount
-from sqlalchemy import select,func,case
+from sqlalchemy import String, cast, select,func,case
 from fastapi import HTTPException, Request, UploadFile
 from app.models.users import Users
 from app.services.pdf_service import PDFService
@@ -799,9 +799,516 @@ class BookFollowUpService:
             raise
         except Exception as e:
             logger.error(f"Error in getRecordBySubject: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Internal server error") 
-     
+            raise HTTPException(status_code=500, detail="Internal server error")
 
+
+    
+    @staticmethod
+    async def reportBookFollowUpWithStats(
+        db: AsyncSession,
+        bookType: Optional[str] = None,
+        bookStatus: Optional[str] = None,
+        check: Optional[bool] = False,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Returns a filtered list of bookFollowUp records with department statistics.
+        
+        Args:
+            db: AsyncSession for database access
+            bookType: Optional filter for book type
+            bookStatus: Optional filter for book status
+            check: Boolean to enable/disable date range filtering
+            startDate: Start date for filtering (YYYY-MM-DD) if check is True
+            endDate: End date for filtering (YYYY-MM-DD) if check is True
+
+        Returns:
+            Dictionary containing records and statistics
+        """
+        try:
+            # Step 1: Build filters (same as original)
+            filters = []
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+
+            # Step 2: Add date filter based on check (same as original)
+            if check:
+                if not startDate or not endDate:
+                    logger.error("startDate and endDate are required when check is True")
+                    raise HTTPException(status_code=400, detail="startDate and endDate are required when check is True")
+                
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        logger.error("startDate cannot be after endDate")
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                    logger.debug(f"Applying date range filter: {start_date} to {end_date}")
+                except ValueError as e:
+                    logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            else:
+                filters.append(BookFollowUpTable.currentDate.is_(None))
+                logger.debug("Applying currentDate IS NULL filter")
+
+            # Step 3: Fetch records (same as original)
+            stmt = (
+                select(
+                    BookFollowUpTable.id,
+                    BookFollowUpTable.bookType,
+                    BookFollowUpTable.bookNo,
+                    BookFollowUpTable.bookDate,
+                    BookFollowUpTable.directoryName,
+                    BookFollowUpTable.incomingNo,
+                    BookFollowUpTable.incomingDate,
+                    BookFollowUpTable.subject,
+                    BookFollowUpTable.destination,
+                    BookFollowUpTable.bookAction,
+                    BookFollowUpTable.bookStatus,
+                    BookFollowUpTable.notes,
+                    BookFollowUpTable.currentDate,
+                    BookFollowUpTable.userID,
+                    Users.username,
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com
+                )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
+                .filter(*filters)
+                .order_by(BookFollowUpTable.bookNo)
+            )
+
+            result = await db.execute(stmt)
+            rows = result.fetchall()
+
+            # Step 4: Calculate department statistics with explicit handling
+            logger.info("Calculating department statistics...")
+            
+            # First, get raw counts to debug
+            raw_count_stmt = (
+                select(
+                    BookFollowUpTable.deID,
+                    func.count(BookFollowUpTable.id).label('count')
+                )
+                .filter(*filters)
+                .group_by(BookFollowUpTable.deID)
+            )
+            
+            raw_result = await db.execute(raw_count_stmt)
+            raw_counts = raw_result.fetchall()
+            logger.info(f"Raw deID counts: {[(row.deID, row.count) for row in raw_counts]}")
+            
+            # Then get department details
+            stats_stmt = (
+                select(
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com,
+                    func.count(BookFollowUpTable.id).label('count')
+                )
+                .outerjoin(Department, cast(BookFollowUpTable.deID, String) == cast(Department.deID, String))
+                .outerjoin(Committee, Department.coID == Committee.coID)
+                .filter(*filters)
+                .group_by(
+                    BookFollowUpTable.deID, 
+                    Department.departmentName, 
+                    Committee.Com
+                )
+                .order_by(func.count(BookFollowUpTable.id).desc())
+            )
+
+            stats_result = await db.execute(stats_stmt)
+            stats_rows = stats_result.fetchall()
+
+            # Step 5: Format records
+            records = [
+                {
+                    "id": row.id,
+                    "bookType": row.bookType,
+                    "bookNo": row.bookNo,
+                    "bookDate": row.bookDate.strftime('%Y-%m-%d') if row.bookDate else None,
+                    "directoryName": row.directoryName,
+                    "incomingNo": row.incomingNo,
+                    "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
+                    "subject": row.subject,
+                    "destination": row.destination,
+                    "bookAction": row.bookAction,
+                    "bookStatus": row.bookStatus,
+                    "notes": row.notes,
+                    "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
+                    "userID": row.userID,
+                    "username": row.username,
+                    "deID": str(row.deID) if row.deID is not None else None,  # Convert to string
+                    "Com": row.Com,
+                    "departmentName": row.departmentName,
+                }
+                for row in rows
+            ]
+
+            # Step 6: Format statistics
+            department_stats = [
+                {
+                    "deID": str(stat_row.deID) if stat_row.deID is not None else "unknown",  # Convert to string
+                    "departmentName": stat_row.departmentName or "غير محدد",
+                    "Com": stat_row.Com or "غير محدد",
+                    "count": stat_row.count
+                }
+                for stat_row in stats_rows
+            ]
+
+            # Calculate totals
+            total_records = len(records)
+            total_departments = len(department_stats)
+
+            return {
+                "records": records,
+                "statistics": {
+                    "totalRecords": total_records,
+                    "totalDepartments": total_departments,
+                    "departmentBreakdown": department_stats,
+                    "filters": {
+                        "bookType": bookType,
+                        "bookStatus": bookStatus,
+                        "dateRangeEnabled": check,
+                        "startDate": startDate if check else None,
+                        "endDate": endDate if check else None
+                    }
+                }
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in reportBookFollowUpWithStats: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered report with statistics.")
+        
+
+
+
+
+
+
+
+
+
+
+
+
+    @staticmethod
+    async def reportBookFollowUpWithStats(
+        db: AsyncSession,
+        bookType: Optional[str] = None,
+        bookStatus: Optional[str] = None,
+        check: Optional[bool] = False,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Returns a filtered list of bookFollowUp records with department statistics.
+        
+        Args:
+            db: AsyncSession for database access
+            bookType: Optional filter for book type
+            bookStatus: Optional filter for book status
+            check: Boolean to enable/disable date range filtering
+            startDate: Start date for filtering (YYYY-MM-DD) if check is True
+            endDate: End date for filtering (YYYY-MM-DD) if check is True
+
+        Returns:
+            Dictionary containing records and statistics
+        """
+        try:
+            # Step 1: Build filters (same as original)
+            filters = []
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+
+            # Step 2: Add date filter based on check (same as original)
+            if check:
+                if not startDate or not endDate:
+                    logger.error("startDate and endDate are required when check is True")
+                    raise HTTPException(status_code=400, detail="startDate and endDate are required when check is True")
+                
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        logger.error("startDate cannot be after endDate")
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                    logger.debug(f"Applying date range filter: {start_date} to {end_date}")
+                except ValueError as e:
+                    logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            else:
+                filters.append(BookFollowUpTable.currentDate.is_(None))
+                logger.debug("Applying currentDate IS NULL filter")
+
+            # Step 3: Fetch records (same as original)
+            stmt = (
+                select(
+                    BookFollowUpTable.id,
+                    BookFollowUpTable.bookType,
+                    BookFollowUpTable.bookNo,
+                    BookFollowUpTable.bookDate,
+                    BookFollowUpTable.directoryName,
+                    BookFollowUpTable.incomingNo,
+                    BookFollowUpTable.incomingDate,
+                    BookFollowUpTable.subject,
+                    BookFollowUpTable.destination,
+                    BookFollowUpTable.bookAction,
+                    BookFollowUpTable.bookStatus,
+                    BookFollowUpTable.notes,
+                    BookFollowUpTable.currentDate,
+                    BookFollowUpTable.userID,
+                    Users.username,
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com
+                )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
+                .filter(*filters)
+                .order_by(BookFollowUpTable.bookNo)
+            )
+
+            result = await db.execute(stmt)
+            rows = result.fetchall()
+
+            # Step 4: Calculate department statistics with explicit handling
+            logger.info("Calculating department statistics...")
+            
+            # First, get raw counts to debug
+            raw_count_stmt = (
+                select(
+                    BookFollowUpTable.deID,
+                    func.count(BookFollowUpTable.id).label('count')
+                )
+                .filter(*filters)
+                .group_by(BookFollowUpTable.deID)
+            )
+            
+            raw_result = await db.execute(raw_count_stmt)
+            raw_counts = raw_result.fetchall()
+            logger.info(f"Raw deID counts: {[(row.deID, row.count) for row in raw_counts]}")
+            
+            # Then get department details
+            stats_stmt = (
+                select(
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com,
+                    func.count(BookFollowUpTable.id).label('count')
+                )
+                .outerjoin(Department, cast(BookFollowUpTable.deID, String) == cast(Department.deID, String))
+                .outerjoin(Committee, Department.coID == Committee.coID)
+                .filter(*filters)
+                .group_by(
+                    BookFollowUpTable.deID, 
+                    Department.departmentName, 
+                    Committee.Com
+                )
+                .order_by(func.count(BookFollowUpTable.id).desc())
+            )
+
+            stats_result = await db.execute(stats_stmt)
+            stats_rows = stats_result.fetchall()
+
+            # Step 5: Format records
+            records = [
+                {
+                    "id": row.id,
+                    "bookType": row.bookType,
+                    "bookNo": row.bookNo,
+                    "bookDate": row.bookDate.strftime('%Y-%m-%d') if row.bookDate else None,
+                    "directoryName": row.directoryName,
+                    "incomingNo": row.incomingNo,
+                    "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
+                    "subject": row.subject,
+                    "destination": row.destination,
+                    "bookAction": row.bookAction,
+                    "bookStatus": row.bookStatus,
+                    "notes": row.notes,
+                    "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
+                    "userID": row.userID,
+                    "username": row.username,
+                    "deID": str(row.deID) if row.deID is not None else None,  # Convert to string
+                    "Com": row.Com,
+                    "departmentName": row.departmentName,
+                }
+                for row in rows
+            ]
+
+            # Step 6: Format statistics
+            department_stats = [
+                {
+                    "deID": str(stat_row.deID) if stat_row.deID is not None else "unknown",  # Convert to string
+                    "departmentName": stat_row.departmentName or "غير محدد",
+                    "Com": stat_row.Com or "غير محدد",
+                    "count": stat_row.count
+                }
+                for stat_row in stats_rows
+            ]
+
+            # Calculate totals
+            total_records = len(records)
+            total_departments = len(department_stats)
+
+            return {
+                "records": records,
+                "statistics": {
+                    "totalRecords": total_records,
+                    "totalDepartments": total_departments,
+                    "departmentBreakdown": department_stats,
+                    "filters": {
+                        "bookType": bookType,
+                        "bookStatus": bookStatus,
+                        "dateRangeEnabled": check,
+                        "startDate": startDate if check else None,
+                        "endDate": endDate if check else None
+                    }
+                }
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in reportBookFollowUpWithStats: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered report with statistics.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    @staticmethod
+    async def getDepartmentStatistics(
+        db: AsyncSession,
+        bookType: Optional[str] = None,
+        bookStatus: Optional[str] = None,
+        check: Optional[bool] = False,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Returns only department statistics without the full record list.
+        Useful for dashboard widgets or summary views.
+        """
+        try:
+            # Build same filters as main method
+            filters = []
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+
+            # Apply same date filtering logic as main method
+            if check and startDate and endDate:
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            elif not check and not startDate and not endDate:
+                filters.append(BookFollowUpTable.currentDate.is_(None))
+            elif startDate and endDate:
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+            # Get department statistics
+            stats_stmt = (
+                select(
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com,
+                    func.count(BookFollowUpTable.id).label('count')
+                )
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
+                .filter(*filters)
+                .group_by(
+                    BookFollowUpTable.deID, 
+                    Department.departmentName, 
+                    Committee.Com
+                )
+                .order_by(func.count(BookFollowUpTable.id).desc())
+            )
+
+            stats_result = await db.execute(stats_stmt)
+            stats_rows = stats_result.fetchall()
+
+            # Get total count
+            total_stmt = select(func.count(BookFollowUpTable.id)).filter(*filters)
+            total_result = await db.execute(total_stmt)
+            total_records = total_result.scalar() or 0
+
+            department_stats = [
+                {
+                    "deID": str(stat_row.deID) if stat_row.deID is not None else "unknown",
+                    "departmentName": stat_row.departmentName or "غير محدد",
+                    "Com": stat_row.Com or "غير محدد",
+                    "count": stat_row.count,
+                    "percentage": round((stat_row.count / total_records * 100), 2) if total_records > 0 else 0
+                }
+                for stat_row in stats_rows
+            ]
+
+            return {
+                "totalRecords": total_records,
+                "totalDepartments": len(department_stats),
+                "departmentBreakdown": department_stats,
+                "filters": {
+                    "bookType": bookType,
+                    "bookStatus": bookStatus,
+                    "dateRangeEnabled": check,
+                    "startDate": startDate if check else None,
+                    "endDate": endDate if check else None
+                }
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in getDepartmentStatistics: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving department statistics.")
 
  
     # @staticmethod

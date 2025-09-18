@@ -5,7 +5,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Form, Depends
 import pydantic
-from sqlalchemy import select,extract,func
+from sqlalchemy import select,extract,func, text
 from sqlalchemy.ext.asyncio import AsyncSession  #  Use AsyncSession instead of sync Session
 from app.database.database import get_async_db  #  Import async DB dependency
 from app.models.architecture.committees import Committee, CommitteeResponse
@@ -836,3 +836,94 @@ async def getRecordBySubjectFunction(
     except Exception as e:
         logger.error(f"Error in POST getRecordBySubject: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+from pydantic import BaseModel, Field
+from typing import List, Optional, Union
+
+class DepartmentStat(BaseModel):
+    deID: Optional[str] = Field(None, description="Department ID as string")  # Changed to string
+    departmentName: str
+    Com: str  
+    count: int
+    percentage: Optional[float] = None
+
+class ReportStatistics(BaseModel):
+    totalRecords: int
+    totalDepartments: int
+    departmentBreakdown: List[DepartmentStat]
+    filters: dict
+
+# Update your existing BookFollowUpResponse model
+class BookFollowUpResponse(BaseModel):
+    id: int
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
+    username: Optional[str] = None
+    deID: Optional[str] = None  # Changed to string and optional
+    Com: Optional[str] = None
+    departmentName: Optional[str] = None
+
+class ReportWithStatsResponse(BaseModel):
+    records: List[BookFollowUpResponse]
+    statistics: ReportStatistics
+
+# New route with statistics
+@bookFollowUpRouter.get("/report-with-stats", response_model=ReportWithStatsResponse)
+async def get_report_with_statistics(
+    bookType: Optional[str] = Query(None, description="Filter by book type"),
+    bookStatus: Optional[str] = Query(None, description="Filter by book status"),
+    check: Optional[bool] = Query(False, description="Enable date range filtering (True) or NULL currentDate (False)"),
+    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for check=True"),
+    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for check=True"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Get filtered book follow-up report with department statistics.
+    Returns both records and statistics.
+    """
+    logger.debug(f"Received report with stats request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}")
+    return await BookFollowUpService.reportBookFollowUpWithStats(db, bookType, bookStatus, check, startDate, endDate)
+
+
+
+@bookFollowUpRouter.get("/test-dept-counts")
+async def test_department_counts(
+    bookStatus: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """Test endpoint to check actual department distribution"""
+    try:
+        # Direct SQL query
+        where_clause = "currentDate IS NULL"
+        if bookStatus:
+            where_clause += f" AND bookStatus = '{bookStatus}'"
+            
+        sql = f"SELECT deID, COUNT(*) as count FROM bookFollowUpTable WHERE {where_clause} GROUP BY deID ORDER BY deID"
+        
+        result = await db.execute(text(sql))
+        rows = result.fetchall()
+        
+        return {
+            "sql_query": sql,
+            "results": [{"deID": row.deID, "count": row.count} for row in rows]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
+
