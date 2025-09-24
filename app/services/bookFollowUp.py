@@ -312,7 +312,7 @@ class BookFollowUpService:
                     setattr(book, key, value)
             
             # Set currentDate as string
-            book.currentDate = datetime.now().date().strftime('%Y-%m-%d')
+            # book.currentDate = datetime.now().date().strftime('%Y-%m-%d')  // this will update currentDate will take datetime.now().date()
 
             # Handle PDF upload if file is provided
             if file is not None and hasattr(file, 'filename') and file.filename:
