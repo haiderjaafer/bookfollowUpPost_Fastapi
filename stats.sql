@@ -1,1 +1,0 @@
-SELECT deID, COUNT(*) as count FROM bookFollowUpTable WHERE currentDate IS not NULL AND bookStatus = 'ﬁÌœ «·«‰Ã«“' and currentDate between '2025-09-01' and '2025-09-30'  GROUP BY deID ORDER BY deID 

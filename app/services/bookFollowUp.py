@@ -10,8 +10,8 @@ from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.architecture.committees import Committee
 from app.models.architecture.department import Department
-from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, UserBookCount
-from sqlalchemy import String, cast, select,func,case
+from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookJunctionBridge, BookStatusCounts, BookTypeCounts, CommitteeDepartmentsJunction, UserBookCount
+from sqlalchemy import String, cast, delete, select,func,case, text,desc
 from fastapi import HTTPException, Request, UploadFile
 from app.models.users import Users
 from app.services.pdf_service import PDFService
@@ -19,6 +19,7 @@ from app.database.config import settings
 from difflib import SequenceMatcher
 from sqlalchemy import or_, func
 import logging
+from sqlalchemy.exc import IntegrityError
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -31,14 +32,160 @@ if not logger.handlers:  # Avoid duplicate handlers
 
 
 class BookFollowUpService:
+    
+    @staticmethod
+    async def get_or_create_junction(db: AsyncSession, coID: int, deID: int) -> int:
+        """
+        Get existing junction or create new one for committee-department pair
+        Optimized for SQL Server with proper error handling
+        """
+        
+        
+        try:
+            # Try to find existing junction first
+            stmt = select(CommitteeDepartmentsJunction).where(
+                CommitteeDepartmentsJunction.coID == coID,
+                CommitteeDepartmentsJunction.deID == deID
+            )
+            result = await db.execute(stmt)
+            junction = result.scalars().first()
+            
+            if junction:
+                print(f"Found existing junction: {junction.id} for coID={coID}, deID={deID}")
+                return junction.id
+            
+            # Create new junction if doesn't exist
+            new_junction = CommitteeDepartmentsJunction(
+                coID=coID,
+                deID=deID
+            )
+            db.add(new_junction)
+            await db.flush()  # Flush to get ID without full commit
+            junction_id = new_junction.id
+            print(f"Created new junction: {junction_id} for coID={coID}, deID={deID}")
+            return junction_id
+            
+        except IntegrityError as e:
+            # Handle unique constraint violation (race condition)
+            await db.rollback()
+            print(f"IntegrityError for coID={coID}, deID={deID}: {str(e)}")
+            
+            # Re-fetch the existing record
+            stmt = select(CommitteeDepartmentsJunction).where(
+                CommitteeDepartmentsJunction.coID == coID,
+                CommitteeDepartmentsJunction.deID == deID
+            )
+            result = await db.execute(stmt)
+            junction = result.scalars().first()
+            
+            if junction:
+                print(f"Retrieved existing junction after conflict: {junction.id}")
+                return junction.id
+            else:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to create or retrieve junction for coID={coID}, deID={deID}"
+                )
+    
     @staticmethod
     async def insert_book(db: AsyncSession, book: BookFollowUpCreate) -> int:
-        new_book = BookFollowUpTable(**book.model_dump())
+        """
+        Insert new book record with SQL Server optimized date handling
+        """
+        book_dict = book.model_dump(exclude_none=True)
+        
+        # Handle date conversion for SQL Server
+        for date_field in ['bookDate', 'incomingDate', 'currentDate']:
+            if date_field in book_dict and book_dict[date_field]:
+                if isinstance(book_dict[date_field], str):
+                    book_dict[date_field] = datetime.strptime(
+                        book_dict[date_field], '%Y-%m-%d'
+                    ).date()
+        
+        new_book = BookFollowUpTable(**book_dict)
         db.add(new_book)
-        await db.commit()
-        await db.refresh(new_book)
-        return new_book.id
+        await db.flush()  # Get ID without full commit
+        book_id = new_book.id
+        print(f"Created book record with ID: {book_id}")
+        return book_id
     
+    @staticmethod
+    async def create_book_junction_bridge(db: AsyncSession, book_id: int, junction_id: int) -> int:
+        """
+        Create bridge record for many-to-many relationship
+        Handles SQL Server specific constraints
+        """
+        
+        try:
+            # Check if bridge already exists (prevent duplicates)
+            existing_stmt = select(BookJunctionBridge).where(
+                BookJunctionBridge.bookID == book_id,
+                BookJunctionBridge.junctionID == junction_id
+            )
+            result = await db.execute(existing_stmt)
+            existing_bridge = result.scalars().first()
+            
+            if existing_bridge:
+                print(f"Bridge already exists: {existing_bridge.id} for bookID={book_id}, junctionID={junction_id}")
+                return existing_bridge.id
+            
+            # Create new bridge record
+            bridge = BookJunctionBridge(
+                bookID=book_id,
+                junctionID=junction_id
+            )
+            db.add(bridge)
+            await db.flush()  # Get ID without full commit
+            bridge_id = bridge.id
+            print(f"Created bridge record: {bridge_id} for bookID={book_id}, junctionID={junction_id}")
+            return bridge_id
+            
+        except IntegrityError as e:
+            await db.rollback()
+            print(f"IntegrityError creating bridge for bookID={book_id}, junctionID={junction_id}: {str(e)}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Failed to create bridge record for book {book_id} and junction {junction_id}"
+            )
+    
+    @staticmethod
+    async def get_book_with_all_departments(db: AsyncSession, book_id: int):
+        """
+        Get book with ALL associated departments through bridge records
+        SQL Server optimized query with proper joins
+        """
+        
+        # Raw SQL for complex query with multiple joins (SQL Server optimized)
+        query = text("""
+            SELECT 
+                b.id as book_id,
+                b.bookNo,
+                b.bookType,
+                b.subject,
+                b.bookStatus,
+                c.coID,
+                c.Com as committee_name,
+                d.deID,
+                d.departmentName,
+                j.id as junction_id,
+                br.id as bridge_id
+            FROM bookFollowUpTable b
+            INNER JOIN book_junction_bridge br ON b.id = br.bookID
+            INNER JOIN committee_departments_junction j ON br.junctionID = j.id
+            INNER JOIN committees c ON j.coID = c.coID
+            INNER JOIN departments d ON j.deID = d.deID
+            WHERE b.id = :book_id
+            ORDER BY d.departmentName
+        """)
+        
+        result = await db.execute(query, {"book_id": book_id})
+        rows = result.fetchall()
+        
+        return rows
+
+
+
+
     
     @staticmethod
     async def getAllBooksNo(db: AsyncSession):
@@ -128,8 +275,7 @@ class BookFollowUpService:
     ) -> Dict[str, Any]:
         """
         Retrieve all BookFollowUpTable records with pagination, optional filters, and associated PDFs.
-        Includes departmentName and Com without relationships.
-        Returns data for DynamicTable with pdfFiles and username for each record.
+        Updated for new multi-department schema with junctions and bridges.
         """
         try:
             # Optional filters
@@ -161,15 +307,16 @@ class BookFollowUpService:
             # Step 2: Pagination offset
             offset = (page - 1) * limit
 
-            # Step 3: Select paginated BookFollowUpTable records with username, departmentName, and Com
-            book_stmt = (
+            # Step 3: Complex query to get book with ALL associated departments
+            # Using CTE to get books with their primary junction info, then collect all departments
+            book_with_primary_junction = (
                 select(
                     BookFollowUpTable.id,
                     BookFollowUpTable.bookType,
                     BookFollowUpTable.bookNo,
                     BookFollowUpTable.bookDate,
                     BookFollowUpTable.directoryName,
-                    BookFollowUpTable.deID,
+                    BookFollowUpTable.junctionID,
                     BookFollowUpTable.incomingNo,
                     BookFollowUpTable.incomingDate,
                     BookFollowUpTable.subject,
@@ -180,52 +327,109 @@ class BookFollowUpService:
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
                     Users.username,
-                    Department.departmentName,
-                    Committee.Com
+                    # Get primary committee and department from junctionID
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID.label('primary_deID'),
+                    Department.departmentName.label('primary_departmentName')
                 )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
+                .outerjoin(
+                    CommitteeDepartmentsJunction, 
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .outerjoin(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                .outerjoin(Department, CommitteeDepartmentsJunction.deID == Department.deID)
                 .filter(*filters)
                 .distinct(BookFollowUpTable.bookNo)
-                .order_by(BookFollowUpTable.id)
+                .order_by(BookFollowUpTable.currentDate.desc())
                 .offset(offset)
                 .limit(limit)
             )
-            book_result = await db.execute(book_stmt)
+            
+            book_result = await db.execute(book_with_primary_junction)
             book_rows = book_result.fetchall()
 
-            # Step 4: Fetch PDFs for all bookNos in the current page, including username
-            book_nos = [row.bookNo for row in book_rows]
-            pdf_stmt = (
-                select(
-                    PDFTable.id,
-                    PDFTable.bookNo,
-                    PDFTable.pdf,
-                    PDFTable.currentDate,
-                    Users.username
+            # Step 4: Get ALL departments for each book through bridge records
+            book_ids = [row.id for row in book_rows]
+            if book_ids:
+                # Query to get all departments for each book
+                all_departments_stmt = (
+                    select(
+                        BookFollowUpTable.id.label('book_id'),
+                        BookFollowUpTable.bookNo,
+                        Department.deID,
+                        Department.departmentName,
+                        Committee.coID,
+                        Committee.Com
+                    )
+                    .select_from(BookFollowUpTable)
+                    .join(BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID)
+                    .join(CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id)
+                    .join(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                    .join(Department, CommitteeDepartmentsJunction.deID == Department.deID)
+                    .filter(BookFollowUpTable.id.in_(book_ids))
+                    .order_by(BookFollowUpTable.id, Department.departmentName)
                 )
-                .outerjoin(Users, PDFTable.userID == Users.id)
-                .filter(PDFTable.bookNo.in_(book_nos))
-            )
-            pdf_result = await db.execute(pdf_stmt)
-            pdf_rows = pdf_result.fetchall()
+                
+                dept_result = await db.execute(all_departments_stmt)
+                dept_rows = dept_result.fetchall()
+                
+                # Group departments by book_id
+                dept_map = {}
+                for dept in dept_rows:
+                    if dept.book_id not in dept_map:
+                        dept_map[dept.book_id] = []
+                    dept_map[dept.book_id].append({
+                        "deID": dept.deID,
+                        "departmentName": dept.departmentName,
+                        "coID": dept.coID,
+                        "Com": dept.Com
+                    })
+            else:
+                dept_map = {}
 
-            # Step 5: Group PDFs by bookNo
-            pdf_map = {}
-            for pdf in pdf_rows:
-                if pdf.bookNo not in pdf_map:
-                    pdf_map[pdf.bookNo] = []
-                pdf_map[pdf.bookNo].append({
-                    "id": pdf.id,
-                    "pdf": pdf.pdf,
-                    "currentDate": pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None,
-                    "username": pdf.username
-                })
+            # Step 5: Fetch PDFs for all bookNos in the current page
+            book_nos = [row.bookNo for row in book_rows]
+            if book_nos:
+                pdf_stmt = (
+                    select(
+                        PDFTable.id,
+                        PDFTable.bookNo,
+                        PDFTable.pdf,
+                        PDFTable.currentDate,
+                        Users.username
+                    )
+                    .outerjoin(Users, PDFTable.userID == Users.id)
+                    .filter(PDFTable.bookNo.in_(book_nos))
+                )
+                pdf_result = await db.execute(pdf_stmt)
+                pdf_rows = pdf_result.fetchall()
 
-            # Step 6: Format data
-            data = [
-                {
+                # Group PDFs by bookNo
+                pdf_map = {}
+                for pdf in pdf_rows:
+                    if pdf.bookNo not in pdf_map:
+                        pdf_map[pdf.bookNo] = []
+                    pdf_map[pdf.bookNo].append({
+                        "id": pdf.id,
+                        "pdf": pdf.pdf,
+                        "currentDate": pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None,
+                        "username": pdf.username
+                    })
+            else:
+                pdf_map = {}
+
+            # Step 6: Format data with multiple departments
+            data = []
+            for i, row in enumerate(book_rows):
+                book_departments = dept_map.get(row.id, [])
+                
+                # Create department summary strings
+                dept_names = [dept["departmentName"] for dept in book_departments if dept["departmentName"]]
+                dept_ids = [dept["deID"] for dept in book_departments]
+                
+                data.append({
                     "serialNo": offset + i + 1,
                     "id": row.id,
                     "bookType": row.bookType,
@@ -235,22 +439,28 @@ class BookFollowUpService:
                     "incomingNo": row.incomingNo,
                     "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
                     "subject": row.subject,
-                    # "destination": row.destination,
                     "bookAction": row.bookAction,
                     "bookStatus": row.bookStatus.strip().lower() if row.bookStatus else None,
                     "notes": row.notes,
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
                     "username": row.username,
-                    "deID": row.deID,
-                     "Com": row.Com,
-                    "departmentName": row.departmentName,
-                   
+                    
+                    # Primary junction info (for backward compatibility)
+                    "deID": row.primary_deID,
+                    "departmentName": row.primary_departmentName,
+                    "coID": row.coID,
+                    "Com": row.Com,
+                    
+                    # All departments for this book
+                    "all_departments": book_departments,
+                    "department_names": ", ".join(dept_names),  # Comma-separated string
+                    "department_count": len(book_departments),
+                    
                     "pdfFiles": pdf_map.get(row.bookNo, [])
-                }
-                for i, row in enumerate(book_rows)
-            ]
-            logger.info(f"Fetched {len(data)} records with PDFs")
+                })
+
+            logger.info(f"Fetched {len(data)} records with PDFs and departments")
 
             # Step 7: Response
             return {
@@ -260,12 +470,174 @@ class BookFollowUpService:
                 "limit": limit,
                 "totalPages": (total + limit - 1) // limit
             }
+            
         except Exception as e:
             logger.error(f"Error fetching books: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")  
-
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     
  
+
+
+
+    @staticmethod
+    async def update_book_with_multi_departments(
+        db: AsyncSession,
+        id: int,
+        book_data: BookFollowUpCreate,
+        committee_id: Optional[int] = None,
+        department_ids: Optional[List[int]] = None,
+        file: Optional[UploadFile] = None,
+        user_id: Optional[int] = None,
+        username: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a book record with multi-department support and optionally add a new PDF.
+        
+        Args:
+            db: Async SQLAlchemy session.
+            id: ID of the book to update.
+            book_data: Pydantic model with fields to update (None values ignored).
+            committee_id: Committee ID for junction management.
+            department_ids: List of department IDs for multi-department assignment.
+            file: Optional uploaded PDF file.
+            user_id: Optional user ID for PDF record.
+            username: Username for file path management.
+            
+        Returns:
+            Dictionary with update results including book_id, junction_ids, etc.
+            
+        Raises:
+            HTTPException: If book not found or database error occurs.
+        """
+        try:
+            # Step 1: Fetch the existing book
+            result = await db.execute(
+                select(BookFollowUpTable).filter(BookFollowUpTable.id == id)
+            )
+            book = result.scalars().first()
+            if not book:
+                logger.error(f"Book ID {id} not found")
+                raise HTTPException(status_code=404, detail="Book not found")
+
+            logger.info(f"Updating book ID {id} with multi-department support")
+
+            # Step 2: Handle multi-department junction updates if provided
+            junction_ids = []
+            bridge_ids = []
+            
+            if committee_id and department_ids:
+                logger.info(f"Updating multi-department assignment: Committee {committee_id} with departments {department_ids}")
+                
+                # Create/get junctions for each committee-department pair
+                for dept_id in department_ids:
+                    junction_id = await BookFollowUpService.get_or_create_junction(db, committee_id, dept_id)
+                    junction_ids.append(junction_id)
+                    logger.info(f"Junction ID for Committee {committee_id} + Department {dept_id}: {junction_id}")
+
+                # Update book's primary junction to the first one
+                if junction_ids:
+                    book.junctionID = junction_ids[0]
+                    logger.info(f"Set primary junctionID to {junction_ids[0]}")
+
+                # Clear existing bridge records for this book
+                await db.execute(
+                    delete(BookJunctionBridge).where(BookJunctionBridge.bookID == id)
+                )
+                logger.info(f"Cleared existing bridge records for book {id}")
+
+                # Create new bridge records for all junctions
+                for junction_id in junction_ids:
+                    bridge_id = await BookFollowUpService.create_book_junction_bridge(db, id, junction_id)
+                    bridge_ids.append(bridge_id)
+                    logger.info(f"Created bridge record {bridge_id} for book {id} and junction {junction_id}")
+
+            # Step 3: Update book fields, excluding unset values
+            update_data = book_data.model_dump(exclude_unset=True)
+            logger.debug(f"Updating book ID {id} with data: {update_data}")
+            
+            for key, value in update_data.items():
+                if value is not None and hasattr(book, key):  # Skip None values and ensure field exists
+                    # Handle date conversion if needed
+                    if key in ['bookDate', 'incomingDate'] and isinstance(value, str):
+                        try:
+                            # Validate date format
+                            datetime.strptime(value, '%Y-%m-%d')
+                            setattr(book, key, value)
+                        except ValueError:
+                            logger.warning(f"Invalid date format for {key}: {value}")
+                            continue
+                    else:
+                        setattr(book, key, value)
+            
+            # Update currentDate
+            # book.currentDate = datetime.now().date()
+
+            # Step 4: Handle PDF upload if file is provided
+            pdf_added = False
+            if file is not None and hasattr(file, 'filename') and file.filename:
+                logger.info(f"Processing file upload: {file.filename}")
+                
+                # Ensure user_id is provided when file is uploaded
+                if not user_id:
+                    logger.error("User ID is required when uploading a file")
+                    raise HTTPException(status_code=400, detail="User ID is required when uploading a file")
+                
+                try:
+                    count = await PDFService.get_pdf_count(db, id)
+                    pdf_path = save_pdf_to_server(
+                        file.file, book.bookNo, book.bookDate, count, settings.PDF_UPLOAD_PATH
+                    )
+                    pdf_data = PDFCreate(
+                        bookID=id,
+                        bookNo=book.bookNo,
+                        countPdf=count,
+                        pdf=pdf_path,
+                        userID=user_id,
+                        currentDate=datetime.now().date().isoformat()
+                    )
+                    await PDFService.insert_pdf(db, pdf_data)
+                    logger.info(f"Successfully saved PDF for book ID {id}")
+                    pdf_added = True
+
+                    # Delete original file (with delay) if username is provided
+                    if username:
+                        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, username, file.filename)
+                        logger.info(f"Attempting to delete: {scanner_path}")
+                        if os.path.isfile(scanner_path):
+                            asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))
+                        else:
+                            logger.warning(f"File not found for deletion: {scanner_path}")
+                            
+                except Exception as file_error:
+                    logger.error(f"Error processing file upload: {str(file_error)}")
+                    raise HTTPException(status_code=500, detail=f"File processing error: {str(file_error)}")
+            else:
+                logger.info(f"No file provided for book ID {id}, updating only book fields")
+
+            # Step 5: Commit all changes
+            await db.commit()
+            await db.refresh(book)
+            logger.info(f"Successfully updated book ID {id} with {len(junction_ids)} junctions and {len(bridge_ids)} bridges")
+
+            # Step 6: Return comprehensive result
+            return {
+                "book_id": book.id,
+                "committee_id": committee_id,
+                "department_ids": department_ids,
+                "junction_ids": junction_ids,
+                "bridge_ids": bridge_ids,
+                "pdf_added": pdf_added,
+                "total_departments": len(department_ids) if department_ids else 0
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating book ID {id}: {str(e)}")
+            await db.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+   
+
 
 
         
@@ -312,7 +684,7 @@ class BookFollowUpService:
                     setattr(book, key, value)
             
             # Set currentDate as string
-            # book.currentDate = datetime.now().date().strftime('%Y-%m-%d')  // this will update currentDate will take datetime.now().date()
+            # book.currentDate = datetime.now().date().strftime('%Y-%m-%d')
 
             # Handle PDF upload if file is provided
             if file is not None and hasattr(file, 'filename') and file.filename:
@@ -376,73 +748,132 @@ class BookFollowUpService:
     @staticmethod
     async def get_book_with_pdfs(db: AsyncSession, id: int) -> BookFollowUpWithPDFResponseForUpdateByBookID:
         """
-        Fetch a book by ID with associated PDFs, PDF count, and username.
+        Fetch a book by ID with associated PDFs, PDF count, username, and all associated departments.
+        Updated for new multi-department schema with junctions and bridges.
         Args:
             db: Async SQLAlchemy session.
             id: Book ID to fetch.
         Returns:
-            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and username.
+            BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and all departments.
         Raises:
             HTTPException: If book not found or database error occurs.
         """
         try:
-            # Fetch book, PDFs, and users in a single query
-            result = await db.execute(
-                select(BookFollowUpTable, PDFTable, Users, Committee, Department)
-                .outerjoin(PDFTable, BookFollowUpTable.id == PDFTable.bookID)
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
-                .outerjoin(Users, PDFTable.userID == Users.id)  # Join Users with PDFTable.userID
-                .filter(BookFollowUpTable.id == id)
-            )
-            rows = result.fetchall()
+            # Step 1: Fetch main book data with primary junction info
+            book_query = select(
+                BookFollowUpTable,
+                Committee.coID,
+                Committee.Com,
+                Department.deID,
+                Department.departmentName,
+                Users.username.label('book_username')
+            ).outerjoin(
+                CommitteeDepartmentsJunction, 
+                BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+            ).outerjoin(
+                Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+            ).outerjoin(
+                Department, CommitteeDepartmentsJunction.deID == Department.deID
+            ).outerjoin(
+                Users, BookFollowUpTable.userID == Users.id
+            ).filter(BookFollowUpTable.id == id)
+
+            result = await db.execute(book_query)
+            book_row = result.first()
             
-            if not rows or not rows[0][0]:
+            if not book_row or not book_row[0]:
                 logger.error(f"Book ID {id} not found")
                 raise HTTPException(status_code=404, detail="Book not found")
 
-            # Extract book, PDFs, user, committee, and department
-            book = rows[0][0]
-            committee = rows[0][3] if rows[0][3] else None
-            department = rows[0][4] if rows[0][4] else None
-            
-            # Extract coID from the committee object
-            coID = committee.coID if committee else None
-            
-            pdfs = [(row[1], row[2]) for row in rows if row[1]] or []  # Pair PDF with its user
+            book = book_row[0]
+            primary_committee = book_row[1]  # coID
+            primary_committee_name = book_row[2]  # Com
+            primary_department = book_row[3]  # deID
+            primary_department_name = book_row[4]  # departmentName
+            book_username = book_row[5]
 
-            # Convert date fields to strings for book
+            # Step 2: Get ALL departments for this book through bridge records
+            all_departments_query = select(
+                Department.deID,
+                Department.departmentName,
+                Committee.coID,
+                Committee.Com
+            ).select_from(BookFollowUpTable).join(
+                BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID
+            ).join(
+                CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id
+            ).join(
+                Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+            ).join(
+                Department, CommitteeDepartmentsJunction.deID == Department.deID
+            ).filter(BookFollowUpTable.id == id).order_by(Department.departmentName)
+
+            dept_result = await db.execute(all_departments_query)
+            dept_rows = dept_result.fetchall()
+
+            # Process all departments
+            all_departments = []
+            for dept_row in dept_rows:
+                all_departments.append({
+                    "deID": dept_row[0],
+                    "departmentName": dept_row[1],
+                    "coID": dept_row[2],
+                    "Com": dept_row[3]
+                })
+
+            # Create department summary
+            dept_names = [dept["departmentName"] for dept in all_departments if dept["departmentName"]]
+            department_names = ", ".join(dept_names) if dept_names else None
+
+            # Step 3: Fetch PDFs associated with this book
+            pdf_query = select(
+                PDFTable,
+                Users.username.label('pdf_username')
+            ).outerjoin(
+                Users, PDFTable.userID == Users.id
+            ).filter(PDFTable.bookID == id)
+
+            pdf_result = await db.execute(pdf_query)
+            pdf_rows = pdf_result.fetchall()
+
+            # Construct PDF responses
+            pdf_responses = []
+            for pdf_row in pdf_rows:
+                pdf = pdf_row[0]
+                pdf_username = pdf_row[1]
+                pdf_responses.append(PDFResponse(
+                    id=pdf.id,
+                    bookNo=pdf.bookNo,
+                    pdf=pdf.pdf,
+                    currentDate=pdf.currentDate.strftime('%Y-%m-%d') if pdf.currentDate else None,
+                    username=pdf_username
+                ))
+
+            # Step 4: Convert date fields to strings for book
             book_date = book.bookDate.strftime('%Y-%m-%d') if isinstance(book.bookDate, date) else book.bookDate
             incoming_date = book.incomingDate.strftime('%Y-%m-%d') if isinstance(book.incomingDate, date) else book.incomingDate
             current_date = book.currentDate.strftime('%Y-%m-%d') if isinstance(book.currentDate, date) else book.currentDate
 
-            # Construct PDF responses
-            pdf_responses = [
-                PDFResponse(
-                    id=pdf.id,
-                    bookNo=pdf.bookNo,
-                    pdf=pdf.pdf,
-                    currentDate=pdf.currentDate,
-                    username=user.username if user else None
-                )
-                for pdf, user in pdfs
-            ]
-
-            # Fetch the book owner's username separately if needed
-            book_user = None
-            if book.userID:
-                book_user_result = await db.execute(
-                    select(Users).filter(Users.id == book.userID)
-                )
-                book_user = book_user_result.scalars().first()
-
-            # Construct response
+            # Step 5: Construct response with multi-department support
             book_data = BookFollowUpWithPDFResponseForUpdateByBookID(
                 id=book.id,
                 bookType=book.bookType,
                 bookNo=book.bookNo,
                 bookDate=book_date,
                 directoryName=book.directoryName,
+                junctionID=book.junctionID,
+                
+                # Primary department/committee info
+                coID=primary_committee,
+                deID=primary_department,
+                Com=primary_committee_name,
+                departmentName=primary_department_name,
+                
+                # Multi-department info
+                all_departments=all_departments,
+                department_names=department_names,
+                department_count=len(all_departments),
+                
                 incomingNo=book.incomingNo,
                 incomingDate=incoming_date,
                 subject=book.subject,
@@ -452,22 +883,19 @@ class BookFollowUpService:
                 notes=book.notes,
                 currentDate=current_date,
                 userID=book.userID,
-                username=book_user.username if book_user else None,
+                username=book_username,
                 countOfPDFs=len(pdf_responses),
-                pdfFiles=pdf_responses,
-                deID=book.deID,
-                coID=coID  # Now using the extracted integer value
+                pdfFiles=pdf_responses
             )
 
-            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs and username {book_data.username}")
+            logger.info(f"Fetched book ID {id} with {len(pdf_responses)} PDFs, {len(all_departments)} departments, and username {book_data.username}")
             return book_data
 
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error fetching book ID {id}: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")    
-
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
     
@@ -481,20 +909,8 @@ class BookFollowUpService:
         endDate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Returns a filtered list of bookFollowUp records based on bookType, bookStatus,
-        and date filtering on currentDate. If check is True, filter by date range
-        (non-NULL currentDate). If check is False, filter by currentDate IS NULL.
-
-        Args:
-            db: AsyncSession for database access
-            bookType: Optional filter for book type
-            bookStatus: Optional filter for book status
-            check: Boolean to enable/disable date range filtering
-            startDate: Start date for filtering (YYYY-MM-DD) if check is True
-            endDate: End date for filtering (YYYY-MM-DD) if check is True
-
-        Returns:
-            List of dictionaries containing book follow-up records
+        Returns a filtered list of bookFollowUp records with multi-department support.
+        Single committee with multiple departments per book.
         """
         try:
             # Step 1: Build filters
@@ -516,7 +932,7 @@ class BookFollowUpService:
                     if start_date > end_date:
                         logger.error("startDate cannot be after endDate")
                         raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
-                    # Ensure currentDate is not NULL and within range
+                    
                     filters.append(BookFollowUpTable.currentDate.isnot(None))
                     filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
                     logger.debug(f"Applying date range filter: {start_date} to {end_date}")
@@ -524,11 +940,10 @@ class BookFollowUpService:
                     logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
                     raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
             else:
-                # When check=False, filter for currentDate IS NULL
                 filters.append(BookFollowUpTable.currentDate.is_(None))
                 logger.debug("Applying currentDate IS NULL filter")
 
-            # Step 3: Fetch matching records with optional user info
+            # Step 3: Fetch matching records with primary junction info
             stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -536,6 +951,7 @@ class BookFollowUpService:
                     BookFollowUpTable.bookNo,
                     BookFollowUpTable.bookDate,
                     BookFollowUpTable.directoryName,
+                    BookFollowUpTable.junctionID,
                     BookFollowUpTable.incomingNo,
                     BookFollowUpTable.incomingDate,
                     BookFollowUpTable.subject,
@@ -546,13 +962,19 @@ class BookFollowUpService:
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
                     Users.username,
-                    BookFollowUpTable.deID,
-                    Department.departmentName,
-                    Committee.Com
+                    # Primary committee and department from junction
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID,
+                    Department.departmentName
                 )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
+                .outerjoin(
+                    CommitteeDepartmentsJunction,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .outerjoin(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                .outerjoin(Department, CommitteeDepartmentsJunction.deID == Department.deID)
                 .filter(*filters)
                 .order_by(BookFollowUpTable.bookNo)
             )
@@ -560,9 +982,53 @@ class BookFollowUpService:
             result = await db.execute(stmt)
             rows = result.fetchall()
 
-            # Step 4: Format response
-            return [
-                {
+            # Step 4: Get book IDs for multi-department queries
+            book_ids = [row.id for row in rows]
+            
+            # Step 5: Get all departments for each book (single committee, multiple departments)
+            dept_map = {}
+            if book_ids:
+                dept_query = select(
+                    BookFollowUpTable.id.label('book_id'),
+                    Department.deID,
+                    Department.departmentName,
+                    Committee.coID,
+                    Committee.Com
+                ).select_from(BookFollowUpTable).join(
+                    BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID
+                ).join(
+                    CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id
+                ).join(
+                    Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+                ).join(
+                    Department, CommitteeDepartmentsJunction.deID == Department.deID
+                ).filter(BookFollowUpTable.id.in_(book_ids))
+                
+                dept_result = await db.execute(dept_query)
+                dept_rows = dept_result.fetchall()
+                
+                for dept_row in dept_rows:
+                    book_id = dept_row.book_id
+                    if book_id not in dept_map:
+                        dept_map[book_id] = []
+                    dept_map[book_id].append({
+                        "deID": dept_row.deID,
+                        "departmentName": dept_row.departmentName,
+                        "coID": dept_row.coID,
+                        "Com": dept_row.Com
+                    })
+
+            # Step 6: Format response with multi-department info (REMOVED multi-committee)
+            response = []
+            for idx, row in enumerate(rows):
+                all_departments = dept_map.get(row.id, [])
+                
+                # Create department summary
+                dept_names = [dept["departmentName"] for dept in all_departments if dept["departmentName"]]
+                department_names = ", ".join(dept_names) if dept_names else row.departmentName
+                
+                response.append({
+                    "serialNo": idx + 1,
                     "id": row.id,
                     "bookType": row.bookType,
                     "bookNo": row.bookNo,
@@ -578,20 +1044,29 @@ class BookFollowUpService:
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
                     "username": row.username,
-                    "deID": row.deID,
+                    
+                    # Single committee info
+                    "coID": row.coID,
                     "Com": row.Com,
+                    "deID": str(row.deID) if row.deID else None,
                     "departmentName": row.departmentName,
-                }
-                for row in rows
-            ]
+                    
+                    # Multi-department info (for single committee)
+                    "all_departments": all_departments,
+                    "department_names": department_names,
+                    "department_count": len(all_departments),
+                    
+                    "len": len(rows)
+                })
+
+            logger.info(f"Report generated: {len(response)} records")
+            return response
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error in reportBookFollowUp: {str(e)}")
+            logger.error(f"Error in reportBookFollowUp: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Error retrieving filtered report.")
-
-
 
 #This means: if BookFollowUpTable.bookType equals 'خارجي', then return 1 (indicating a match). If not, it returns None by default
     @staticmethod
@@ -667,19 +1142,35 @@ class BookFollowUpService:
             decoded_subject = unquote(subject).strip()
             logger.info(f"Searching for subject: {decoded_subject}")
 
-            # Step 1: Try exact match first
+            # Step 1: Try exact match first with multi-department support
             pdf_count_subquery = (
                 select(func.count(PDFTable.id))
                 .where(PDFTable.bookID == BookFollowUpTable.id)
                 .scalar_subquery()
             )
 
-            exact_stmt = (
-                select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
+            # Main query with junction support
+            base_query = (
+                select(
+                    BookFollowUpTable,
+                    Users.username,
+                    pdf_count_subquery.label("countOfPDFs"),
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID,
+                    Department.departmentName
+                )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                .where(BookFollowUpTable.subject == decoded_subject)
+                .outerjoin(
+                    CommitteeDepartmentsJunction,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .outerjoin(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                .outerjoin(Department, CommitteeDepartmentsJunction.deID == Department.deID)
             )
-            
+
+            # Exact match query
+            exact_stmt = base_query.where(BookFollowUpTable.subject == decoded_subject)
             result = await db.execute(exact_stmt)
             records = result.all()
             
@@ -706,11 +1197,7 @@ class BookFollowUpService:
                     logger.info(f"Found fuzzy match: '{best_subject}' with similarity: {best_matches[0][1]:.2f}")
                     
                     # Query with the best matching subject
-                    fuzzy_stmt = (
-                        select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
-                        .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                        .where(BookFollowUpTable.subject == best_subject)
-                    )
+                    fuzzy_stmt = base_query.where(BookFollowUpTable.subject == best_subject)
                     result = await db.execute(fuzzy_stmt)
                     records = result.all()
 
@@ -728,11 +1215,7 @@ class BookFollowUpService:
                     for word in search_words[:5]:  # Limit to first 5 significant words
                         conditions.append(BookFollowUpTable.subject.ilike(f'%{word}%'))
                     
-                    partial_stmt = (
-                        select(BookFollowUpTable, Users.username, pdf_count_subquery.label("countOfPDFs"))
-                        .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                        .where(or_(*conditions))
-                    )
+                    partial_stmt = base_query.where(or_(*conditions))
                     result = await db.execute(partial_stmt)
                     records = result.all()
 
@@ -748,51 +1231,101 @@ class BookFollowUpService:
                     detail=f"No record found for subject: {decoded_subject[:100]}..."
                 )
 
-            # Rest of your processing code remains the same...
+            # Step 4: Process records and get all departments for each book
             response_array = []
             for record in records:
-                book_followup, username, count_of_pdfs = record
-                
+                book_followup = record[0]
+                username = record[1]
+                count_of_pdfs = record[2]
+                primary_committee_id = record[3]  # coID
+                primary_committee_name = record[4]  # Com
+                primary_department_id = record[5]  # deID
+                primary_department_name = record[6]  # departmentName
+
+                # Get ALL departments for this book through bridge records
+                all_departments_query = select(
+                    Department.deID,
+                    Department.departmentName,
+                    Committee.coID,
+                    Committee.Com
+                ).select_from(BookFollowUpTable).join(
+                    BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID
+                ).join(
+                    CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id
+                ).join(
+                    Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+                ).join(
+                    Department, CommitteeDepartmentsJunction.deID == Department.deID
+                ).filter(BookFollowUpTable.id == book_followup.id).order_by(Department.departmentName)
+
+                dept_result = await db.execute(all_departments_query)
+                dept_rows = dept_result.fetchall()
+
+                # Process all departments
+                all_departments = []
+                for dept_row in dept_rows:
+                    all_departments.append({
+                        "deID": dept_row[0],
+                        "departmentName": dept_row[1],
+                        "coID": dept_row[2],
+                        "Com": dept_row[3]
+                    })
+
+                # Create department summary
+                dept_names = [dept["departmentName"] for dept in all_departments if dept["departmentName"]]
+                department_names = ", ".join(dept_names) if dept_names else None
+
                 # Get PDFs for this book
                 pdf_stmt = select(PDFTable).where(PDFTable.bookID == book_followup.id)
                 pdf_result = await db.execute(pdf_stmt)
                 pdfs = pdf_result.scalars().all()
 
-                # Build response
+                # Build response with multi-department support
                 response = BookFollowUpWithPDFResponseForUpdateByBookID(
-                id=book_followup.id,
-                bookType=book_followup.bookType,
-                bookNo=book_followup.bookNo,
-                bookDate=book_followup.bookDate.strftime("%Y-%m-%d") if book_followup.bookDate else None,
-                directoryName=book_followup.directoryName,
-                # coID=book_followup.coID,
-                deID=book_followup.deID,
-                incomingNo=book_followup.incomingNo,
-                incomingDate=book_followup.incomingDate.strftime("%Y-%m-%d") if book_followup.incomingDate else None,
-                subject=book_followup.subject,
-                destination=book_followup.destination,
-                bookAction=book_followup.bookAction,
-                bookStatus=book_followup.bookStatus,
-                notes=book_followup.notes,
-                currentDate=book_followup.currentDate.strftime("%Y-%m-%d") if book_followup.currentDate else None,
-                userID=book_followup.userID,
-                username=username,
-                countOfPDFs=count_of_pdfs,
-                pdfFiles=[
-                    PDFResponse(
-                        id=pdf.id,
-                        bookNo=pdf.bookNo,
-                        pdf=pdf.pdf,
-                        currentDate=pdf.currentDate.strftime("%Y-%m-%d") if pdf.currentDate else None,
-                        username=username
-                    )
-                    for pdf in pdfs
-                ]
-            )
+                    id=book_followup.id,
+                    bookType=book_followup.bookType,
+                    bookNo=book_followup.bookNo,
+                    bookDate=book_followup.bookDate.strftime("%Y-%m-%d") if book_followup.bookDate else None,
+                    directoryName=book_followup.directoryName,
+                    junctionID=book_followup.junctionID,
+                    
+                    # Primary department/committee info
+                    coID=primary_committee_id,
+                    deID=primary_department_id,
+                    Com=primary_committee_name,
+                    departmentName=primary_department_name,
+                    
+                    # Multi-department info
+                    all_departments=all_departments,
+                    department_names=department_names,
+                    department_count=len(all_departments),
+                    
+                    incomingNo=book_followup.incomingNo,
+                    incomingDate=book_followup.incomingDate.strftime("%Y-%m-%d") if book_followup.incomingDate else None,
+                    subject=book_followup.subject,
+                    destination=book_followup.destination,
+                    bookAction=book_followup.bookAction,
+                    bookStatus=book_followup.bookStatus,
+                    notes=book_followup.notes,
+                    currentDate=book_followup.currentDate.strftime("%Y-%m-%d") if book_followup.currentDate else None,
+                    userID=book_followup.userID,
+                    username=username,
+                    countOfPDFs=count_of_pdfs,
+                    pdfFiles=[
+                        PDFResponse(
+                            id=pdf.id,
+                            bookNo=pdf.bookNo,
+                            pdf=pdf.pdf,
+                            currentDate=pdf.currentDate.strftime("%Y-%m-%d") if pdf.currentDate else None,
+                            username=username
+                        )
+                        for pdf in pdfs
+                    ]
+                )
 
-            response_array.append(response)
+                response_array.append(response)
 
-
+            logger.info(f"Found {len(response_array)} records for subject search")
             return {"data": response_array}
 
         except HTTPException:
@@ -1186,28 +1719,8 @@ class BookFollowUpService:
         except Exception as e:
             logger.error(f"Error in reportBookFollowUpWithStats: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered report with statistics.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        
+# check this and deleted 
     @staticmethod
     async def getDepartmentStatistics(
         db: AsyncSession,
@@ -1439,3 +1952,182 @@ class BookFollowUpService:
     #             status_code=500,
     #             detail="Internal server error while fetching record"
     #         )
+
+
+
+
+
+
+
+
+
+
+
+
+
+    @staticmethod
+    async def reportBookFollowUpByDepartment(
+        db: AsyncSession,
+        bookType: Optional[str] = None,
+        bookStatus: Optional[str] = None,
+        check: Optional[bool] = False,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None,
+        coID: Optional[str] = None,
+        deID: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Returns a filtered list of bookFollowUp records by department and committee.
+        
+        Args:
+            db: AsyncSession for database access
+            bookType: Optional filter for book type
+            bookStatus: Optional filter for book status
+            check: Boolean to enable/disable date range filtering
+            startDate: Start date for filtering (YYYY-MM-DD) if check is True
+            endDate: End date for filtering (YYYY-MM-DD) if check is True
+            coID: Optional filter for committee ID
+            deID: Optional filter for department ID
+
+        Returns:
+            Dictionary containing records, total, and department/committee info
+        """
+        try:
+            # Step 1: Build filters
+            filters = []
+            if bookType:
+                filters.append(BookFollowUpTable.bookType == bookType.strip())
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+            
+            # Add department filter
+            if deID:
+                filters.append(BookFollowUpTable.deID == deID.strip())
+                logger.debug(f"Applying department filter: deID={deID}")
+
+            # Step 2: Add date filter based on check
+            if check:
+                if not startDate or not endDate:
+                    logger.error("startDate and endDate are required when check is True")
+                    raise HTTPException(status_code=400, detail="startDate and endDate are required when check is True")
+                
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        logger.error("startDate cannot be after endDate")
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                    logger.debug(f"Applying date range filter: {start_date} to {end_date}")
+                except ValueError as e:
+                    logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            else:
+                filters.append(BookFollowUpTable.currentDate.is_(None))
+                logger.debug("Applying currentDate IS NULL filter")
+
+            # Step 3: Build main query with optional joins
+            stmt = (
+                select(
+                    BookFollowUpTable.id,
+                    BookFollowUpTable.bookType,
+                    BookFollowUpTable.bookNo,
+                    BookFollowUpTable.bookDate,
+                    BookFollowUpTable.directoryName,
+                    BookFollowUpTable.incomingNo,
+                    BookFollowUpTable.incomingDate,
+                    BookFollowUpTable.subject,
+                    BookFollowUpTable.destination,
+                    BookFollowUpTable.bookAction,
+                    BookFollowUpTable.bookStatus,
+                    BookFollowUpTable.notes,
+                    BookFollowUpTable.currentDate,
+                    BookFollowUpTable.userID,
+                    Users.username,
+                    BookFollowUpTable.deID,
+                    Department.departmentName,
+                    Committee.Com
+                )
+                .outerjoin(Users, BookFollowUpTable.userID == Users.id)
+                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
+                .outerjoin(Committee, Department.coID == Committee.coID)
+            )
+            
+            # Apply committee filter if provided
+            if coID:
+                filters.append(Committee.coID == coID.strip())
+                logger.debug(f"Applying committee filter: coID={coID}")
+            
+            # Apply filters and execute query
+            result = await db.execute(stmt.filter(*filters).order_by(BookFollowUpTable.bookNo))
+            rows = result.fetchall()
+
+            # Step 4: Get Department and Committee info based on filters
+            com_name = None
+            dept_name = None
+
+            if deID or coID:
+                # Query for specific department/committee info
+                dept_query = (
+                    select(Department.departmentName, Committee.Com)
+                    .outerjoin(Committee, Department.coID == Committee.coID)
+                )
+                
+                if deID:
+                    dept_query = dept_query.where(Department.deID == deID.strip())
+                elif coID:
+                    dept_query = dept_query.where(Committee.coID == coID.strip())
+                
+                dept_result = await db.execute(dept_query)
+                dept_info = dept_result.first()
+                
+                if dept_info:
+                    dept_name = dept_info.departmentName
+                    com_name = dept_info.Com
+                    logger.debug(f"Found department info - Com: {com_name}, Department: {dept_name}")
+
+            # Step 5: Format records
+            records = []
+            total_records = len(rows)
+
+            for i, row in enumerate(rows):
+                records.append({
+                    "serialNo": i + 1,
+                    "id": row.id,
+                    "bookType": row.bookType,
+                    "bookNo": row.bookNo,
+                    "bookDate": row.bookDate.strftime('%Y-%m-%d') if row.bookDate else None,
+                    "directoryName": row.directoryName,
+                    "incomingNo": row.incomingNo,
+                    "incomingDate": row.incomingDate.strftime('%Y-%m-%d') if row.incomingDate else None,
+                    "subject": row.subject,
+                    "destination": row.destination,
+                    "bookAction": row.bookAction,
+                    "bookStatus": row.bookStatus,
+                    "notes": row.notes,
+                    "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
+                    "userID": row.userID,
+                    "username": row.username,
+                    "deID": str(row.deID) if row.deID is not None else None,
+                    "Com": row.Com,
+                    "departmentName": row.departmentName,
+                })
+
+            logger.info(f"Found {len(records)} records matching filters")
+
+            # Step 6: Return structured response with department/committee info
+            return {
+                "records": records,
+                "total": total_records,
+                "Com": com_name,
+                "departmentName": dept_name
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in reportBookFollowUpByDepartment: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error retrieving filtered department records.")    
+        
+        

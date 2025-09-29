@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime,timedelta, timezone
+from datetime import date, datetime,timedelta, timezone
 from pathlib import Path
 import traceback
 from typing import Any, Dict, List, Optional
@@ -16,7 +16,7 @@ from app.services.pdf_service import PDFService
 from app.helper.save_pdf import async_delayed_delete, save_pdf_to_server  #  Responsible for saving the uploaded file
 from app.database.config import settings
 from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
-from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, SubjectRequest, UserBookCount
+from app.models.bookFollowUpTable import BookFollowUpCreate, BookFollowUpResponse, BookFollowUpTable, BookFollowUpUpdate, BookFollowUpWithPDFResponseForUpdateByBookID, BookStatusCounts, BookTypeCounts, PaginatedOrderOut, SubjectRequest, UserBookCount
 from sqlalchemy.sql.expression import cast
 from sqlalchemy.types import Date
 from app.services.lateBooks import LateBookFollowUpService
@@ -38,17 +38,18 @@ bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"]
 
 
 
+# Updated Route
 @bookFollowUpRouter.post("")
 async def add_book_with_pdf(
     bookNo: str = Form(...),
     bookDate: str = Form(...),
     bookType: str = Form(...),
     directoryName: str = Form(...),
-    deID: str = Form(...),
+    coID: int = Form(...),  # Single Committee ID
+    deIDs: str = Form(...),  # Comma-separated Department IDs: "11,15,21"
     incomingNo: str = Form(...),
     incomingDate: str = Form(...),
     subject: str = Form(...),
-    # destination: str = Form(...),
     bookAction: str = Form(...),
     bookStatus: str = Form(...),
     notes: str = Form(...),
@@ -56,16 +57,25 @@ async def add_book_with_pdf(
     file: UploadFile = Form(...),
     username: str = Form(),
     db: AsyncSession = Depends(get_async_db)
-    
 ):
     try:
-        # Insert book
+        # Step 1: Parse department IDs
+        department_ids = [int(dept_id.strip()) for dept_id in deIDs.split(',')]
+        print(f"Committee {coID} will be associated with departments: {department_ids}")
+        
+        # Step 2: Get or create multiple junctions for committee-department pairs
+        junction_ids = []
+        for dept_id in department_ids:
+            junction_id = await BookFollowUpService.get_or_create_junction(db, coID, dept_id)
+            junction_ids.append(junction_id)
+            print(f"Junction ID for Committee {coID} + Department {dept_id}: {junction_id}")
+        
+        # Step 3: Create book data (use first junction as primary reference)
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
             bookDate=bookDate,
             bookType=bookType,
             directoryName=directoryName,
-            deID=deID,
             incomingNo=incomingNo,
             incomingDate=incomingDate,
             subject=subject,
@@ -74,51 +84,72 @@ async def add_book_with_pdf(
             bookStatus=bookStatus,
             notes=notes,
             currentDate=datetime.today().strftime('%Y-%m-%d'),
-            userID=userID
+            userID=userID,
+            junctionID=junction_ids[0]  # Primary junction reference
         )
+        
+        print(f"book_data...........: {book_data}")
+        # Step 4: Insert book
         book_id = await BookFollowUpService.insert_book(db, book_data)
         print(f"Inserted book with ID: {book_id}")
-
-        # Count PDFs
+        
+        # Step 5: Create bridge records for ALL departments (many-to-many)
+        bridge_ids = []
+        for junction_id in junction_ids:
+            bridge_id = await BookFollowUpService.create_book_junction_bridge(db, book_id, junction_id)
+            bridge_ids.append(bridge_id)
+            print(f"Created bridge record {bridge_id} for book {book_id} and junction {junction_id}")
+        
+        # Step 6: Handle PDF processing (existing logic)
         count = await PDFService.get_pdf_count(db, book_id)
         print(f"PDF count for book {book_id}: {count}")
-
+        
         # Save file
         upload_dir = settings.PDF_UPLOAD_PATH
         with file.file as f:
             pdf_path = save_pdf_to_server(f, bookNo, bookDate, count, upload_dir)
         print(f"Saved PDF to: {pdf_path}")
-
+        
         # Close upload stream
         file.file.close()
-
+        
         # Insert PDF record
         pdf_data = PDFCreate(
             bookID=book_id,
             bookNo=bookNo,
             countPdf=count,
             pdf=pdf_path,
-            userID=int(userID),
+            userID=userID,
             currentDate=datetime.now().date().isoformat()
         )
         await PDFService.insert_pdf(db, pdf_data)
         print(f"Inserted PDF record: {pdf_path}")
-
+        
         # Delete original file (with delay)
-        scanner_path = os.path.join(settings.PDF_SOURCE_PATH,username, file.filename)
+        scanner_path = os.path.join(settings.PDF_SOURCE_PATH, username, file.filename)
         print(f"Attempting to delete: {scanner_path}")
-        if os.path.isfile(scanner_path):                                          # os.path.isfile(...) to ensure the file exists
-           # delayed_delete(scanner_path, delay_sec=3)
-           asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))   #asyncio.create_task(...) to run async_delayed_delete(...) in the background  and No await, so it doesn’t block the request 
-
+        if os.path.isfile(scanner_path):
+            asyncio.create_task(async_delayed_delete(scanner_path, delay_sec=3))
         else:
-            print(f" File not found for deletion: {scanner_path}")
-
-        return {"message": "Book and PDF saved successfully", "bookID": book_id}
-
+            print(f"File not found for deletion: {scanner_path}")
+        
+        return {
+            "message": "Book and PDF saved successfully with multiple departments", 
+            "bookID": book_id,
+            "committee_id": coID,
+            "department_ids": department_ids,
+            "junction_ids": junction_ids,
+            "bridge_ids": bridge_ids
+        }
+        
     except Exception as e:
         print(f"❌ Error in add_book_with_pdf: {str(e)}")
+        await db.rollback()
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+    
+
+
+
 
 
 @bookFollowUpRouter.post("/add-supplement")
@@ -384,6 +415,94 @@ async def get_pdf_file(pdf_id: int, db: AsyncSession = Depends(get_async_db)):
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
     
 
+
+
+
+# Updated JSON PATCH Route with Multi-Department Support
+@bookFollowUpRouter.patch("/{id}/json", response_model=Dict[str, Any])
+async def update_book_json(
+    id: int,
+    book_data: BookFollowUpUpdate,  # Use updated model
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Update a book record by ID using JSON data with multi-department support (no file upload).
+    
+    Args:
+        id: Book ID to update.
+        book_data: Pydantic model with update fields including multi-department support.
+        db: Database session.
+        
+    Returns:
+        JSON response with update results and multi-department information.
+    """
+    try:
+        logger.info(f"JSON update for book ID {id}: {book_data}")
+        
+        # Extract multi-department fields
+        committee_id = book_data.coID
+        deIDs_str = book_data.deIDs
+        
+        # Parse department IDs
+        department_ids = []
+        if deIDs_str:
+            try:
+                if isinstance(deIDs_str, str):
+                    # Handle comma-separated string: "11,15,21"
+                    if deIDs_str.strip().startswith('['):
+                        # Handle JSON array string: "[11,15,21]"
+                        import json
+                        department_ids = json.loads(deIDs_str)
+                    else:
+                        # Handle comma-separated string
+                        department_ids = [int(dept_id.strip()) for dept_id in deIDs_str.split(',') if dept_id.strip()]
+                logger.info(f"Parsed department IDs: {department_ids}")
+            except (ValueError, json.JSONDecodeError) as e:
+                raise HTTPException(status_code=400, detail=f"Invalid department IDs format: {deIDs_str}")
+
+        # Validate committee and departments relationship
+        if committee_id and department_ids:
+            logger.info(f"JSON update with multi-department: Committee {committee_id} with departments {department_ids}")
+        elif committee_id or department_ids:
+            if committee_id and not department_ids:
+                raise HTTPException(status_code=400, detail="Department IDs required when committee ID is provided")
+            elif department_ids and not committee_id:
+                raise HTTPException(status_code=400, detail="Committee ID required when department IDs are provided")
+
+        # Convert to BookFollowUpCreate (excluding multi-department fields)
+        create_data_dict = book_data.model_dump(exclude_none=True, exclude={'coID', 'deIDs'})
+        create_data = BookFollowUpCreate(**create_data_dict)
+        
+        # Call updated service method with multi-department support
+        result = await BookFollowUpService.update_book_with_multi_departments(
+            db=db,
+            id=id,
+            book_data=create_data,
+            committee_id=committee_id,
+            department_ids=department_ids if department_ids else None,
+            file=None,
+            user_id=book_data.userID,
+            username=None
+        )
+
+        return {
+            "message": "Book updated successfully via JSON",
+            "bookID": result["book_id"],
+            "committee_id": result.get("committee_id"),
+            "department_ids": result.get("department_ids"),
+            "junction_ids": result.get("junction_ids"),
+            "bridge_ids": result.get("bridge_ids"),
+            "total_departments": result.get("total_departments", 0)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in JSON update for ID {id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+
+# Updated main PATCH route to handle both file and non-file scenarios
 @bookFollowUpRouter.patch("/{id}", response_model=Dict[str, Any])
 async def update_book_with_pdf(
     id: int,
@@ -398,34 +517,37 @@ async def update_book_with_pdf(
     bookAction: Optional[str] = Form(None),
     bookStatus: Optional[str] = Form(None),
     notes: Optional[str] = Form(None),
-    userID: Optional[str] = Form(None),  # FIXED: Removed space in "userI  D"
-    username: Optional[str] = Form(None),  # FIXED: Changed from Form() to Form(None)
-    selectedCommittee: Optional[str] = Form(None),  # Added missing field
-    deID: Optional[str] = Form(None),  # Added missing field
-    file: Optional[UploadFile] = File(None),  # FIXED: Changed from Form(None) to File(None)
+    userID: Optional[str] = Form(None),
+    username: Optional[str] = Form(None),
+    coID: Optional[str] = Form(None),  # Committee ID
+    deIDs: Optional[str] = Form(None),  # Comma-separated department IDs
+    file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Update a book record by ID with provided fields and optionally add a new PDF.
+    Update a book record by ID with optional file upload and multi-department support.
+    Handles both scenarios: with file upload and without file upload.
+    
     Args:
         id: Path parameter for the book ID.
         bookNo, bookDate, ...: Optional form fields to update.
         userID: Optional user ID for book and PDF.
+        coID: Committee ID for junction management.
+        deIDs: Comma-separated department IDs (e.g., "11,15,21").
         file: Optional PDF file to add.
         db: Async SQLAlchemy session.
+        
     Returns:
-        JSON response with success message and updated book ID.
-    Raises:
-        HTTPException: For validation errors, missing book, or server errors.
+        JSON response with success message, updated book ID, and junction details.
     """
     try:
-        logger.info(f"Updating book ID {id} with data: bookNo={bookNo}, userID={userID}, file={file.filename if file else None}")
+        logger.info(f"Updating book ID {id} with data: bookNo={bookNo}, userID={userID}, coID={coID}, deIDs={deIDs}, file={file.filename if file else None}")
         
         # Validate at least one field or file is provided
         form_fields = [
             bookNo, bookDate, bookType, directoryName, incomingNo,
             incomingDate, subject, destination, bookAction, bookStatus,
-            notes, userID, selectedCommittee, deID
+            notes, userID, coID, deIDs
         ]
         
         # Check if we have a valid file
@@ -437,7 +559,33 @@ async def update_book_with_pdf(
         if not has_form_data and not has_file:
             raise HTTPException(status_code=400, detail="At least one field or file must be provided")
 
-        # Create book data model
+        # Parse department IDs if provided
+        department_ids = []
+        if deIDs and deIDs.strip():
+            try:
+                department_ids = [int(dept_id.strip()) for dept_id in deIDs.split(',') if dept_id.strip()]
+                logger.info(f"Parsed department IDs: {department_ids}")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid department IDs format: {deIDs}")
+
+        # Parse committee ID
+        committee_id = None
+        if coID and coID.strip():
+            try:
+                committee_id = int(coID)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid committee ID: {coID}")
+
+        # Validate committee and departments relationship
+        if committee_id and department_ids:
+            logger.info(f"Updating with multi-department assignment: Committee {committee_id} with departments {department_ids}")
+        elif committee_id or department_ids:
+            if committee_id and not department_ids:
+                raise HTTPException(status_code=400, detail="Department IDs required when committee ID is provided")
+            elif department_ids and not committee_id:
+                raise HTTPException(status_code=400, detail="Committee ID required when department IDs are provided")
+
+        # Create book data model (excluding junction-related fields)
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
             bookDate=bookDate,
@@ -450,26 +598,32 @@ async def update_book_with_pdf(
             bookAction=bookAction,
             bookStatus=bookStatus,
             notes=notes,
-            userID=int(userID) if userID else None,
-            selectedCommittee=int(selectedCommittee) if selectedCommittee else None,
-            deID=int(deID) if deID else None
+            userID=int(userID) if userID else None
         )
 
         logger.debug(f"Book data created: {book_data}")
 
-        # Call service method
-        updated_book_id = await BookFollowUpService.update_book(
-            db,
-            id,
-            book_data,
-            file if has_file else None,  # Only pass file if it's valid
-            int(userID) if userID else None,
-            username
+        # Call service method with multi-department support
+        result = await BookFollowUpService.update_book_with_multi_departments(
+            db=db,
+            id=id,
+            book_data=book_data,
+            committee_id=committee_id,
+            department_ids=department_ids if department_ids else None,
+            file=file if has_file else None,
+            user_id=int(userID) if userID else None,
+            username=username
         )
 
         return {
-            "message": "Book updated successfully",
-            "bookID": updated_book_id
+            "message": "Book updated successfully" + (" with file" if has_file else ""),
+            "bookID": result["book_id"],
+            "committee_id": result.get("committee_id"),
+            "department_ids": result.get("department_ids"),
+            "junction_ids": result.get("junction_ids"),
+            "bridge_ids": result.get("bridge_ids"),
+            "pdf_added": result.get("pdf_added", False),
+            "total_departments": result.get("total_departments", 0)
         }
 
     except ValueError as e:
@@ -482,42 +636,6 @@ async def update_book_with_pdf(
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
-# Alternative approach: Create a separate route for JSON updates
-@bookFollowUpRouter.patch("/{id}/json", response_model=Dict[str, Any])
-async def update_book_json(
-    id: int,
-    book_data: BookFollowUpCreate,  # Use a Pydantic model for JSON
-    db: AsyncSession = Depends(get_async_db)
-):
-    """
-    Update a book record by ID using JSON data (no file upload).
-    """
-    try:
-        logger.info(f"JSON update for book ID {id}: {book_data}")
-        
-        # Convert to BookFollowUpCreate
-        create_data = BookFollowUpCreate(**book_data.model_dump(exclude_none=True))
-        
-        # Call service method without file
-        updated_book_id = await BookFollowUpService.update_book(
-            db,
-            id,
-            create_data,
-            file=None,
-            user_id=book_data.userID,
-            username=None
-        )
-
-        return {
-            "message": "Book updated successfully",
-            "bookID": updated_book_id
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in JSON update for ID {id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 # You'll also need this Pydantic model
 # class BookFollowUpUpdate(pydantic.BaseModel):
@@ -543,12 +661,12 @@ async def get_book_with_pdfs(
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Fetch a book by ID with all fields, associated PDFs, PDF count, and username.
+    Fetch a book by ID with all fields, associated PDFs, PDF count, username, and multi-department support.
     Args:
         id: Book ID to fetch.
         db: Async SQLAlchemy session.
     Returns:
-        BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and username.
+        BookFollowUpWithPDFResponseForUpdateByBookID with book data, PDFs, and all associated departments.
     Raises:
         HTTPException: For missing book or server errors.
     """
@@ -563,6 +681,10 @@ async def get_book_with_pdfs(
     
 
 
+
+    
+
+
 @bookFollowUpRouter.get("/report", response_model=List[BookFollowUpResponse])
 async def get_filtered_report(
     bookType: Optional[str] = Query(None, description="Filter by book type"),
@@ -573,19 +695,11 @@ async def get_filtered_report(
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Get filtered book follow-up report. If check=True, filter by date range.
-    If check=False, filter by currentDate IS NULL.
-
-    Args:
-        bookType: Filter by book type
-        bookStatus: Filter by book status
-        check: Enable date range filtering (True) or NULL currentDate (False)
-        startDate: Start date for filtering (YYYY-MM-DD)
-        endDate: End date for filtering (YYYY-MM-DD)
-        db: AsyncSession dependency
+    Get filtered book follow-up report with multi-department and multi-committee support.
+    If check=True, filter by date range. If check=False, filter by currentDate IS NULL.
     
     Returns:
-        List of book follow-up records
+        List of book follow-up records with committee and department information
     """
     logger.debug(f"Received report request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}")
     return await BookFollowUpService.reportBookFollowUp(db, bookType, bookStatus, check, startDate, endDate)
@@ -839,7 +953,7 @@ async def getRecordBySubjectFunction(
 
 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Union
 
 class DepartmentStat(BaseModel):
@@ -855,30 +969,12 @@ class ReportStatistics(BaseModel):
     departmentBreakdown: List[DepartmentStat]
     filters: dict
 
-# Update your existing BookFollowUpResponse model
-class BookFollowUpResponse(BaseModel):
-    id: int
-    bookType: Optional[str] = None
-    bookNo: Optional[str] = None
-    bookDate: Optional[str] = None
-    directoryName: Optional[str] = None
-    incomingNo: Optional[str] = None
-    incomingDate: Optional[str] = None
-    subject: Optional[str] = None
-    destination: Optional[str] = None
-    bookAction: Optional[str] = None
-    bookStatus: Optional[str] = None
-    notes: Optional[str] = None
-    currentDate: Optional[str] = None
-    userID: Optional[int] = None
-    username: Optional[str] = None
-    deID: Optional[str] = None  # Changed to string and optional
-    Com: Optional[str] = None
-    departmentName: Optional[str] = None
 
 class ReportWithStatsResponse(BaseModel):
     records: List[BookFollowUpResponse]
     statistics: ReportStatistics
+
+    
 
 # New route with statistics
 @bookFollowUpRouter.get("/report-with-stats", response_model=ReportWithStatsResponse)
@@ -924,6 +1020,58 @@ async def test_department_counts(
     except Exception as e:
         return {"error": str(e)}
 
+
+
+
+
+
+class DepartmentReportResponse(BaseModel):
+    serialNo: int
+    id: int
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
+    username: Optional[str] = None
+    deID: Optional[str] = None
+    Com: Optional[str] = None
+    departmentName: Optional[str] = None
+
+class DepartmentReportWithTotal(BaseModel):
+    records: List[DepartmentReportResponse]
+    total: int
+    Com: Optional[str] = None
+    departmentName: Optional[str] = None
+
+
+
+
+@bookFollowUpRouter.get("/report-with-stats-department", response_model=DepartmentReportWithTotal)
+async def get_filtered_department_report(
+    bookType: Optional[str] = Query(None, description="Filter by book type"),
+    bookStatus: Optional[str] = Query(None, description="Filter by book status"),
+    check: Optional[bool] = Query(False, description="Enable date range filtering (True) or NULL currentDate (False)"),
+    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for check=True"),
+    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for check=True"),
+    coID: Optional[str] = Query(None, description="Filter by committee ID"),
+    deID: Optional[str] = Query(None, description="Filter by department ID"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Get filtered book follow-up records by department and committee.
+    Returns records with total count and department/committee info.
+    """
+    logger.debug(f"Received filtered report request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}, coID={coID}, deID={deID}")
+    return await BookFollowUpService.reportBookFollowUpByDepartment(db, bookType, bookStatus, check, startDate, endDate, coID, deID)
 
 
 

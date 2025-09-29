@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
 from app.models.architecture.committees import Committee
 from app.models.architecture.department import Department
-from app.models.bookFollowUpTable import BookFollowUpTable
+from app.models.bookFollowUpTable import BookFollowUpTable, BookJunctionBridge, CommitteeDepartmentsJunction
 from app.models.users import Users
 
 import logging
@@ -30,7 +30,7 @@ class LateBookFollowUpService:
     ) -> Dict[str, Any]:
         """
         Retrieve late books (status 'قيد الانجاز') with pagination filtered by userID.
-        Returns paginated data with total count, page, limit, total pages, and username.
+        Updated for new multi-department schema with junctions and bridges.
         """
         try:
             logger.info(f"Getting late books for userID: {userID}, page: {page}, limit: {limit}")
@@ -42,7 +42,7 @@ class LateBookFollowUpService:
             # Base filter conditions
             base_filters = [
                 BookFollowUpTable.bookStatus == 'قيد الانجاز',
-                BookFollowUpTable.userID == userID  # Apply userID filter to count as well
+                BookFollowUpTable.userID == userID
             ]
 
             # Step 1: Count total records WITH userID filter applied
@@ -67,13 +67,14 @@ class LateBookFollowUpService:
                     "totalPages": total_pages
                 }
 
-            # Step 3: Build query for paginated data with username
+            # Step 3: Build query for paginated data with primary junction info
             query = select(
                 BookFollowUpTable.id,
                 BookFollowUpTable.bookType,
                 BookFollowUpTable.bookNo,
                 BookFollowUpTable.bookDate,
                 BookFollowUpTable.directoryName,
+                BookFollowUpTable.junctionID,  # Include junctionID
                 BookFollowUpTable.incomingNo,
                 BookFollowUpTable.incomingDate,
                 BookFollowUpTable.subject,
@@ -84,36 +85,84 @@ class LateBookFollowUpService:
                 BookFollowUpTable.currentDate,
                 BookFollowUpTable.userID,
                 Users.username,
-                BookFollowUpTable.deID,
+                # Get primary department and committee from junction
+                Department.deID,
                 Department.departmentName,
+                Committee.coID,
                 Committee.Com
             ).outerjoin(
                 Users, BookFollowUpTable.userID == Users.id
             ).outerjoin(
-                Department, BookFollowUpTable.deID == Department.deID
+                # Join through junctionID instead of direct deID
+                CommitteeDepartmentsJunction, 
+                BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
             ).outerjoin(
-                Committee, Department.coID == Committee.coID
+                Department, CommitteeDepartmentsJunction.deID == Department.deID
+            ).outerjoin(
+                Committee, CommitteeDepartmentsJunction.coID == Committee.coID
             ).filter(
-                *base_filters  # Apply same filters as count query
+                *base_filters
             ).order_by(
                 BookFollowUpTable.currentDate.desc()
             ).offset(offset).limit(limit)
 
-            # Execute query
+            # Execute main query
             result = await db.execute(query)
             late_books = result.fetchall()
 
+            # Step 4: Get ALL departments for each book (optional - for complete multi-department view)
+            book_ids = [book.id for book in late_books]
+            dept_map = {}
+            
+            if book_ids:
+                # Query to get all departments for each late book
+                all_departments_stmt = (
+                    select(
+                        BookFollowUpTable.id.label('book_id'),
+                        Department.deID,
+                        Department.departmentName,
+                        Committee.coID,
+                        Committee.Com
+                    )
+                    .select_from(BookFollowUpTable)
+                    .join(BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID)
+                    .join(CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id)
+                    .join(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                    .join(Department, CommitteeDepartmentsJunction.deID == Department.deID)
+                    .filter(BookFollowUpTable.id.in_(book_ids))
+                    .order_by(BookFollowUpTable.id, Department.departmentName)
+                )
+                
+                dept_result = await db.execute(all_departments_stmt)
+                dept_rows = dept_result.fetchall()
+                
+                # Group departments by book_id
+                for dept in dept_rows:
+                    if dept.book_id not in dept_map:
+                        dept_map[dept.book_id] = []
+                    dept_map[dept.book_id].append({
+                        "deID": dept.deID,
+                        "departmentName": dept.departmentName,
+                        "coID": dept.coID,
+                        "Com": dept.Com
+                    })
+
             logger.info(f"Retrieved {len(late_books)} records for page {page}")
 
-            # Step 4: Format response
-            data = [
-                {   
-                    "serialNo": offset + i + 1,  # Auto-increment serial number based on pagination
+            # Step 5: Format response
+            data = []
+            for i, book in enumerate(late_books):
+                all_departments = dept_map.get(book.id, [])
+                dept_names = [dept["departmentName"] for dept in all_departments if dept["departmentName"]]
+                
+                data.append({   
+                    "serialNo": offset + i + 1,
                     "id": book.id,
                     "bookType": book.bookType,
                     "bookNo": book.bookNo,
                     "bookDate": book.bookDate.strftime('%Y-%m-%d') if book.bookDate else None,
                     "directoryName": book.directoryName,
+                    "junctionID": book.junctionID,  # Include junction ID
                     "incomingNo": book.incomingNo,
                     "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,
                     "subject": book.subject,
@@ -124,15 +173,22 @@ class LateBookFollowUpService:
                     "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
                     "userID": book.userID,
                     "username": book.username,
+                    
+                    # Primary department info (from junctionID)
                     "deID": book.deID,
-                    "Com": book.Com,
                     "departmentName": book.departmentName,
+                    "coID": book.coID,
+                    "Com": book.Com,
+                    
+                    # All departments for this book
+                    "all_departments": all_departments,
+                    "department_names": ", ".join(dept_names),
+                    "department_count": len(all_departments),
+                    
                     "pdfFiles": []  # Empty array to match BookFollowUpData
-                }
-                for i, book in enumerate(late_books)
-            ]
+                })
 
-            # Step 5: Response with proper pagination info
+            # Step 6: Response with proper pagination info
             response = {
                 "data": data,
                 "total": total,
@@ -149,3 +205,6 @@ class LateBookFollowUpService:
         except Exception as e:
             logger.error(f"Error fetching late books: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+    
