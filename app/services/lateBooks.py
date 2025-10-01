@@ -207,4 +207,118 @@ class LateBookFollowUpService:
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
+
+    # # Alternative simplified version if you only need primary department
+    # @staticmethod
+    # async def getLateBooksSimple(
+    #     db: AsyncSession,
+    #     page: int = 1,
+    #     limit: int = 10,
+    #     userID: int = None,
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Simplified version that only shows primary department from junctionID
+    #     """
+    #     try:
+    #         logger.info(f"Getting late books (simple) for userID: {userID}, page: {page}, limit: {limit}")
+            
+    #         if not userID:
+    #             raise HTTPException(status_code=400, detail="userID is required")
+
+    #         base_filters = [
+    #             BookFollowUpTable.bookStatus == 'قيد الانجاز',
+    #             BookFollowUpTable.userID == userID
+    #         ]
+
+    #         # Count query
+    #         count_stmt = select(func.count(BookFollowUpTable.id)).filter(*base_filters)
+    #         count_result = await db.execute(count_stmt)
+    #         total = count_result.scalar() or 0
+
+    #         # Pagination
+    #         offset = (page - 1) * limit
+    #         total_pages = (total + limit - 1) // limit if total > 0 else 1
+
+    #         # Main query - only primary department
+    #         query = select(
+    #             BookFollowUpTable.id,
+    #             BookFollowUpTable.bookType,
+    #             BookFollowUpTable.bookNo,
+    #             BookFollowUpTable.bookDate,
+    #             BookFollowUpTable.directoryName,
+    #             BookFollowUpTable.junctionID,
+    #             BookFollowUpTable.incomingNo,
+    #             BookFollowUpTable.incomingDate,
+    #             BookFollowUpTable.subject,
+    #             BookFollowUpTable.destination,
+    #             BookFollowUpTable.bookAction,
+    #             BookFollowUpTable.bookStatus,
+    #             BookFollowUpTable.notes,
+    #             BookFollowUpTable.currentDate,
+    #             BookFollowUpTable.userID,
+    #             Users.username,
+    #             Department.deID,
+    #             Department.departmentName,
+    #             Committee.coID,
+    #             Committee.Com
+    #         ).outerjoin(
+    #             Users, BookFollowUpTable.userID == Users.id
+    #         ).outerjoin(
+    #             CommitteeDepartmentsJunction, 
+    #             BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+    #         ).outerjoin(
+    #             Department, CommitteeDepartmentsJunction.deID == Department.deID
+    #         ).outerjoin(
+    #             Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+    #         ).filter(
+    #             *base_filters
+    #         ).order_by(
+    #             BookFollowUpTable.currentDate.desc()
+    #         ).offset(offset).limit(limit)
+
+    #         result = await db.execute(query)
+    #         late_books = result.fetchall()
+
+    #         # Format response - simplified
+    #         data = [
+    #             {   
+    #                 "serialNo": offset + i + 1,
+    #                 "id": book.id,
+    #                 "bookType": book.bookType,
+    #                 "bookNo": book.bookNo,
+    #                 "bookDate": book.bookDate.strftime('%Y-%m-%d') if book.bookDate else None,
+    #                 "directoryName": book.directoryName,
+    #                 "junctionID": book.junctionID,
+    #                 "incomingNo": book.incomingNo,
+    #                 "incomingDate": book.incomingDate.strftime('%Y-%m-%d') if book.incomingDate else None,
+    #                 "subject": book.subject,
+    #                 "destination": book.destination,
+    #                 "bookAction": book.bookAction,
+    #                 "bookStatus": book.bookStatus,
+    #                 "notes": book.notes,
+    #                 "currentDate": book.currentDate.strftime('%Y-%m-%d') if book.currentDate else None,
+    #                 "userID": book.userID,
+    #                 "username": book.username,
+    #                 "deID": book.deID,
+    #                 "departmentName": book.departmentName,
+    #                 "coID": book.coID,
+    #                 "Com": book.Com,
+    #                 "pdfFiles": []
+    #             }
+    #             for i, book in enumerate(late_books)
+    #         ]
+
+    #         return {
+    #             "data": data,
+    #             "total": total,
+    #             "page": page,
+    #             "limit": limit,
+    #             "totalPages": total_pages
+    #         }
+            
+    #     except Exception as e:
+    #         logger.error(f"Error fetching late books (simple): {str(e)}", exc_info=True)
+    #         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
     
+

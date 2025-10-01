@@ -108,6 +108,7 @@ class BookFollowUpService:
         book_id = new_book.id
         print(f"Created book record with ID: {book_id}")
         return book_id
+
     
     @staticmethod
     async def create_book_junction_bridge(db: AsyncSession, book_id: int, junction_id: int) -> int:
@@ -149,6 +150,49 @@ class BookFollowUpService:
             )
     
     @staticmethod
+
+    
+    @staticmethod
+    async def create_book_junction_bridge(db: AsyncSession, book_id: int, junction_id: int) -> int:
+        """
+        Create bridge record for many-to-many relationship
+        Handles SQL Server specific constraints
+        """
+        
+        try:
+            # Check if bridge already exists (prevent duplicates)
+            existing_stmt = select(BookJunctionBridge).where(
+                BookJunctionBridge.bookID == book_id,
+                BookJunctionBridge.junctionID == junction_id
+            )
+            result = await db.execute(existing_stmt)
+            existing_bridge = result.scalars().first()
+            
+            if existing_bridge:
+                print(f"Bridge already exists: {existing_bridge.id} for bookID={book_id}, junctionID={junction_id}")
+                return existing_bridge.id
+            
+            # Create new bridge record
+            bridge = BookJunctionBridge(
+                bookID=book_id,
+                junctionID=junction_id
+            )
+            db.add(bridge)
+            await db.flush()  # Get ID without full commit
+            bridge_id = bridge.id
+            print(f"Created bridge record: {bridge_id} for bookID={book_id}, junctionID={junction_id}")
+            return bridge_id
+            
+        except IntegrityError as e:
+            await db.rollback()
+            print(f"IntegrityError creating bridge for bookID={book_id}, junctionID={junction_id}: {str(e)}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Failed to create bridge record for book {book_id} and junction {junction_id}"
+            )
+    
+    @staticmethod
+
     async def get_book_with_all_departments(db: AsyncSession, book_id: int):
         """
         Get book with ALL associated departments through bridge records
@@ -1544,28 +1588,18 @@ class BookFollowUpService:
         endDate: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Returns a filtered list of bookFollowUp records with department statistics.
-        
-        Args:
-            db: AsyncSession for database access
-            bookType: Optional filter for book type
-            bookStatus: Optional filter for book status
-            check: Boolean to enable/disable date range filtering
-            startDate: Start date for filtering (YYYY-MM-DD) if check is True
-            endDate: End date for filtering (YYYY-MM-DD) if check is True
-
-        Returns:
-            Dictionary containing records and statistics
+        Returns a filtered list of bookFollowUp records with multi-department statistics.
+        Single committee with multiple departments per book.
         """
         try:
-            # Step 1: Build filters (same as original)
+            # Step 1: Build filters
             filters = []
             if bookType:
                 filters.append(BookFollowUpTable.bookType == bookType.strip())
             if bookStatus:
                 filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
 
-            # Step 2: Add date filter based on check (same as original)
+            # Step 2: Add date filter based on check
             if check:
                 if not startDate or not endDate:
                     logger.error("startDate and endDate are required when check is True")
@@ -1577,6 +1611,7 @@ class BookFollowUpService:
                     if start_date > end_date:
                         logger.error("startDate cannot be after endDate")
                         raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    
                     filters.append(BookFollowUpTable.currentDate.isnot(None))
                     filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
                     logger.debug(f"Applying date range filter: {start_date} to {end_date}")
@@ -1587,7 +1622,7 @@ class BookFollowUpService:
                 filters.append(BookFollowUpTable.currentDate.is_(None))
                 logger.debug("Applying currentDate IS NULL filter")
 
-            # Step 3: Fetch records (same as original)
+            # Step 3: Fetch matching records with primary junction info
             stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -1595,6 +1630,7 @@ class BookFollowUpService:
                     BookFollowUpTable.bookNo,
                     BookFollowUpTable.bookDate,
                     BookFollowUpTable.directoryName,
+                    BookFollowUpTable.junctionID,
                     BookFollowUpTable.incomingNo,
                     BookFollowUpTable.incomingDate,
                     BookFollowUpTable.subject,
@@ -1605,13 +1641,19 @@ class BookFollowUpService:
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
                     Users.username,
-                    BookFollowUpTable.deID,
-                    Department.departmentName,
-                    Committee.Com
+                    # Primary committee and department from junction
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID,
+                    Department.departmentName
                 )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
+                .outerjoin(
+                    CommitteeDepartmentsJunction,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .outerjoin(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                .outerjoin(Department, CommitteeDepartmentsJunction.deID == Department.deID)
                 .filter(*filters)
                 .order_by(BookFollowUpTable.bookNo)
             )
@@ -1619,48 +1661,80 @@ class BookFollowUpService:
             result = await db.execute(stmt)
             rows = result.fetchall()
 
-            # Step 4: Calculate department statistics with explicit handling
-            logger.info("Calculating department statistics...")
+            # Step 4: Get book IDs for multi-department queries
+            book_ids = [row.id for row in rows]
             
-            # First, get raw counts to debug
-            raw_count_stmt = (
-                select(
-                    BookFollowUpTable.deID,
-                    func.count(BookFollowUpTable.id).label('count')
-                )
-                .filter(*filters)
-                .group_by(BookFollowUpTable.deID)
-            )
-            
-            raw_result = await db.execute(raw_count_stmt)
-            raw_counts = raw_result.fetchall()
-            logger.info(f"Raw deID counts: {[(row.deID, row.count) for row in raw_counts]}")
-            
-            # Then get department details
-            stats_stmt = (
-                select(
-                    BookFollowUpTable.deID,
+            # Step 5: Get all departments for each book (single committee, multiple departments)
+            dept_map = {}
+            if book_ids:
+                dept_query = select(
+                    BookFollowUpTable.id.label('book_id'),
+                    Department.deID,
                     Department.departmentName,
-                    Committee.Com,
-                    func.count(BookFollowUpTable.id).label('count')
-                )
-                .outerjoin(Department, cast(BookFollowUpTable.deID, String) == cast(Department.deID, String))
-                .outerjoin(Committee, Department.coID == Committee.coID)
-                .filter(*filters)
-                .group_by(
-                    BookFollowUpTable.deID, 
-                    Department.departmentName, 
+                    Committee.coID,
                     Committee.Com
-                )
-                .order_by(func.count(BookFollowUpTable.id).desc())
-            )
+                ).select_from(BookFollowUpTable).join(
+                    BookJunctionBridge, BookFollowUpTable.id == BookJunctionBridge.bookID
+                ).join(
+                    CommitteeDepartmentsJunction, BookJunctionBridge.junctionID == CommitteeDepartmentsJunction.id
+                ).join(
+                    Committee, CommitteeDepartmentsJunction.coID == Committee.coID
+                ).join(
+                    Department, CommitteeDepartmentsJunction.deID == Department.deID
+                ).filter(BookFollowUpTable.id.in_(book_ids))
+                
+                dept_result = await db.execute(dept_query)
+                dept_rows = dept_result.fetchall()
+                
+                for dept_row in dept_rows:
+                    book_id = dept_row.book_id
+                    if book_id not in dept_map:
+                        dept_map[book_id] = []
+                    dept_map[book_id].append({
+                        "deID": dept_row.deID,
+                        "departmentName": dept_row.departmentName,
+                        "coID": dept_row.coID,
+                        "Com": dept_row.Com
+                    })
 
-            stats_result = await db.execute(stats_stmt)
-            stats_rows = stats_result.fetchall()
-
-            # Step 5: Format records
-            records = [
+            # Step 6: Calculate department statistics
+            logger.info("Calculating multi-department statistics...")
+            
+            # Count books per department (a book with 2 departments counts once for each)
+            department_counts = {}
+            for book_id, departments in dept_map.items():
+                for dept in departments:
+                    dept_key = (dept['deID'], dept['departmentName'], dept['Com'])
+                    if dept_key not in department_counts:
+                        department_counts[dept_key] = 0
+                    department_counts[dept_key] += 1
+            
+            # Format department statistics
+            department_stats = [
                 {
+                    "deID": str(dept_key[0]) if dept_key[0] else "unknown",
+                    "departmentName": dept_key[1] or "غير محدد",
+                    "Com": dept_key[2] or "غير محدد",
+                    "count": count
+                }
+                for dept_key, count in sorted(
+                    department_counts.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            ]
+
+            # Step 7: Format records with multi-department info
+            records = []
+            for idx, row in enumerate(rows):
+                all_departments = dept_map.get(row.id, [])
+                
+                # Create department summary
+                dept_names = [dept["departmentName"] for dept in all_departments if dept["departmentName"]]
+                department_names = ", ".join(dept_names) if dept_names else row.departmentName
+                
+                records.append({
+                    "serialNo": idx + 1,
                     "id": row.id,
                     "bookType": row.bookType,
                     "bookNo": row.bookNo,
@@ -1676,34 +1750,50 @@ class BookFollowUpService:
                     "currentDate": row.currentDate.strftime('%Y-%m-%d') if row.currentDate else None,
                     "userID": row.userID,
                     "username": row.username,
-                    "deID": str(row.deID) if row.deID is not None else None,  # Convert to string
+                    
+                    # Single committee info
+                    "coID": row.coID,
                     "Com": row.Com,
+                    "deID": str(row.deID) if row.deID else None,
                     "departmentName": row.departmentName,
-                }
-                for row in rows
-            ]
-
-            # Step 6: Format statistics
-            department_stats = [
-                {
-                    "deID": str(stat_row.deID) if stat_row.deID is not None else "unknown",  # Convert to string
-                    "departmentName": stat_row.departmentName or "غير محدد",
-                    "Com": stat_row.Com or "غير محدد",
-                    "count": stat_row.count
-                }
-                for stat_row in stats_rows
-            ]
+                    
+                    # Multi-department info
+                    "all_departments": all_departments,
+                    "department_names": department_names,
+                    "department_count": len(all_departments)
+                })
 
             # Calculate totals
             total_records = len(records)
             total_departments = len(department_stats)
+            
+            # Calculate books per committee (should be one committee now)
+            committee_stats = {}
+            for book_id, departments in dept_map.items():
+                if departments:
+                    com_name = departments[0]['Com']  # All departments have same committee
+                    if com_name:
+                        committee_stats[com_name] = committee_stats.get(com_name, 0) + 1
 
+            committee_breakdown = [
+                {"committeeName": com_name, "count": count}
+                for com_name, count in sorted(
+                    committee_stats.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            ]
+
+            logger.info(f"Report with stats generated: {total_records} records, {total_departments} departments")
+            
             return {
                 "records": records,
                 "statistics": {
                     "totalRecords": total_records,
                     "totalDepartments": total_departments,
+                    "totalCommittees": len(committee_breakdown),
                     "departmentBreakdown": department_stats,
+                    "committeeBreakdown": committee_breakdown,
                     "filters": {
                         "bookType": bookType,
                         "bookStatus": bookStatus,
@@ -1717,7 +1807,7 @@ class BookFollowUpService:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error in reportBookFollowUpWithStats: {str(e)}")
+            logger.error(f"Error in reportBookFollowUpWithStats: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Error retrieving filtered report with statistics.")
         
 # check this and deleted 
@@ -2129,5 +2219,4 @@ class BookFollowUpService:
         except Exception as e:
             logger.error(f"Error in reportBookFollowUpByDepartment: {str(e)}")
             raise HTTPException(status_code=500, detail="Error retrieving filtered department records.")    
-        
         

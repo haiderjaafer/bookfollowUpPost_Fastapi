@@ -100,6 +100,7 @@ class BookJunctionBridge(Base):
 #     class Config:
 #         from_attributes = True
 
+
 # Update your existing BookFollowUpResponse model
 class BookFollowUpResponse(BaseModel):
     serialNo: Optional[int] = None  
@@ -135,6 +136,7 @@ class BookFollowUpResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
 
 
 

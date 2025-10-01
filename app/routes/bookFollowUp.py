@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 import os
 from urllib.parse import unquote
 import logging
+from pydantic import BaseModel
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -953,46 +954,100 @@ async def getRecordBySubjectFunction(
 
 
 
-from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Union
+# Updated Pydantic Models for Multi-Department Stats Report
 
-class DepartmentStat(BaseModel):
-    deID: Optional[str] = Field(None, description="Department ID as string")  # Changed to string
+class DepartmentInfo(BaseModel):
+    """Individual department information"""
+    deID: int
     departmentName: str
-    Com: str  
+    coID: int
+    Com: str
+
+class BookRecordWithStats(BaseModel):
+    """Book record with multi-department support"""
+    serialNo: Optional[int] = None
+    id: int
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
+    username: Optional[str] = None
+    
+    # Primary committee/department
+    coID: Optional[int] = None
+    Com: Optional[str] = None
+    deID: Optional[str] = None
+    departmentName: Optional[str] = None
+    
+    # Multi-department fields
+    all_departments: List[DepartmentInfo] = []
+    department_names: Optional[str] = None
+    department_count: Optional[int] = 0
+    
+    class Config:
+        from_attributes = True
+
+class DepartmentStatistic(BaseModel):
+    """Department statistics"""
+    deID: str
+    departmentName: str
+    Com: str
     count: int
-    percentage: Optional[float] = None
+
+class CommitteeStatistic(BaseModel):
+    """Committee statistics"""
+    committeeName: str
+    count: int
+
+class ReportFilters(BaseModel):
+    """Applied filters"""
+    bookType: Optional[str] = None
+    bookStatus: Optional[str] = None
+    dateRangeEnabled: bool = False
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
 
 class ReportStatistics(BaseModel):
+    """Report statistics"""
     totalRecords: int
     totalDepartments: int
-    departmentBreakdown: List[DepartmentStat]
-    filters: dict
-
+    totalCommittees: int
+    departmentBreakdown: List[DepartmentStatistic]
+    committeeBreakdown: List[CommitteeStatistic]
+    filters: ReportFilters
 
 class ReportWithStatsResponse(BaseModel):
-    records: List[BookFollowUpResponse]
+    """Complete response with records and statistics"""
+    records: List[BookRecordWithStats]
     statistics: ReportStatistics
+    
+    class Config:
+        from_attributes = True
 
     
 
 # New route with statistics
 @bookFollowUpRouter.get("/report-with-stats", response_model=ReportWithStatsResponse)
 async def get_report_with_statistics(
-    bookType: Optional[str] = Query(None, description="Filter by book type"),
-    bookStatus: Optional[str] = Query(None, description="Filter by book status"),
-    check: Optional[bool] = Query(False, description="Enable date range filtering (True) or NULL currentDate (False)"),
-    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for check=True"),
-    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for check=True"),
+    bookType: Optional[str] = Query(None),
+    bookStatus: Optional[str] = Query(None),
+    check: Optional[bool] = Query(False),
+    startDate: Optional[str] = Query(None),
+    endDate: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_async_db)
 ):
-    """
-    Get filtered book follow-up report with department statistics.
-    Returns both records and statistics.
-    """
-    logger.debug(f"Received report with stats request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}")
-    return await BookFollowUpService.reportBookFollowUpWithStats(db, bookType, bookStatus, check, startDate, endDate)
-
+    return await BookFollowUpService.reportBookFollowUpWithStats(
+        db, bookType, bookStatus, check, startDate, endDate
+    )
 
 
 @bookFollowUpRouter.get("/test-dept-counts")
