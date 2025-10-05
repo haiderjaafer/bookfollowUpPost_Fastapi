@@ -11,7 +11,7 @@ from app.models.PDFTable import PDFCreate, PDFResponse, PDFTable
 from app.models.architecture.committees import Committee
 from app.models.architecture.department import Department
 from app.models.bookFollowUpTable import BookFollowUpResponse, BookFollowUpTable, BookFollowUpCreate, BookFollowUpWithPDFResponseForUpdateByBookID, BookJunctionBridge, BookStatusCounts, BookTypeCounts, CommitteeDepartmentsJunction, UserBookCount
-from sqlalchemy import String, cast, delete, select,func,case, text,desc
+from sqlalchemy import String, and_, cast, delete, select,func,case, text,desc
 from fastapi import HTTPException, Request, UploadFile
 from app.models.users import Users
 from app.services.pdf_service import PDFService
@@ -1914,153 +1914,11 @@ class BookFollowUpService:
             raise HTTPException(status_code=500, detail="Error retrieving department statistics.")
 
  
-    # @staticmethod
-    # async def getRecordBySubject(
-    #     db: AsyncSession,
-    #     subject: Optional[str] = None
-    # ) -> Dict[str, Any]:
-    #     try:
-    #         # Step 1: Validate input
-    #         if not subject:
-    #             logger.warning("No subject provided in query")
-    #             raise HTTPException(
-    #                 status_code=400,
-    #                 detail="Subject query parameter is required"
-    #             )
-
-    #         # Decode URL-encoded subject
-    #         decoded_subject = unquote(subject).strip()
-    #         logger.info(f"Decoded subject: {decoded_subject}")
-
-    #         # Additional validation
-    #         if len(decoded_subject) < 1:
-    #             logger.error("Subject is empty after decoding")
-    #             raise HTTPException(
-    #                 status_code=400,
-    #                 detail="Subject cannot be empty"
-    #             )
-    #         if len(decoded_subject) > 500:  # Adjust based on your schema
-    #             logger.error(f"Subject too long: {len(decoded_subject)} characters")
-    #             raise HTTPException(
-    #                 status_code=400,
-    #                 detail="Subject exceeds maximum length of 255 characters"
-    #             )
-    #         # if any(char in decoded_subject for char in [';', '--', '/*', '*/']):
-    #         #     logger.error(f"Invalid characters in subject: {decoded_subject}")
-    #         #     raise HTTPException(
-    #         #         status_code=400,
-    #         #         detail="Subject contains invalid characters"
-    #         #     )
-
-    #         # Step 2: Query for the first matching record with user and PDF count
-    #         # Use a subquery for countOfPDFs to avoid GROUP BY issues
-    #         pdf_count_subquery = (
-    #             select(func.count(PDFTable.id).label("countOfPDFs"))
-    #             .where(PDFTable.bookID == BookFollowUpTable.id)
-    #             .correlate(BookFollowUpTable)
-    #             .scalar_subquery()
-    #         )
-
-    #         stmt = (
-    #             select(
-    #                 BookFollowUpTable,
-    #                 Users.username,
-    #                 pdf_count_subquery.label("countOfPDFs")
-    #             )
-    #             .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-    #             .where(BookFollowUpTable.subject == decoded_subject)
-    #             # .limit(1)  # SQL Server: TOP 1
-    #         )
-    #         logger.debug(f"Executing query: {stmt}")
-    #         result = await db.execute(stmt)
-    #         record = result.first()
-
-    #         if record is None:
-    #             logger.info(f"No record found for subject: {decoded_subject}")
-    #             raise HTTPException(
-    #                 status_code=404,
-    #                 detail=f"No record found for subject: {decoded_subject}"
-    #             )
-
-    #         book_followup, username, count_of_pdfs = record
-
-    #         # Step 3: Fetch associated PDFs
-    #         pdf_stmt = (
-    #             select(PDFTable)
-    #             .where(PDFTable.bookID == book_followup.id)
-    #         )
-    #         pdf_result = await db.execute(pdf_stmt)
-    #         pdfs = pdf_result.scalars().all()
-
-    #         # Step 4: Format response
-    #         response_array = []
-
-    #         response = BookFollowUpWithPDFResponseForUpdateByBookID(
-    #             id=book_followup.id,
-    #             bookType=book_followup.bookType,
-    #             bookNo=book_followup.bookNo,
-    #             bookDate=book_followup.bookDate.strftime("%Y-%m-%d") if book_followup.bookDate else None,
-    #             directoryName=book_followup.directoryName,
-    #             # coID=book_followup.coID,
-    #             deID=book_followup.deID,
-    #             incomingNo=book_followup.incomingNo,
-    #             incomingDate=book_followup.incomingDate.strftime("%Y-%m-%d") if book_followup.incomingDate else None,
-    #             subject=book_followup.subject,
-    #             destination=book_followup.destination,
-    #             bookAction=book_followup.bookAction,
-    #             bookStatus=book_followup.bookStatus,
-    #             notes=book_followup.notes,
-    #             currentDate=book_followup.currentDate.strftime("%Y-%m-%d") if book_followup.currentDate else None,
-    #             userID=book_followup.userID,
-    #             username=username,
-    #             countOfPDFs=count_of_pdfs,
-    #             pdfFiles=[
-    #                 PDFResponse(
-    #                     id=pdf.id,
-    #                     bookNo=pdf.bookNo,
-    #                     pdf=pdf.pdf,
-    #                     currentDate=pdf.currentDate.strftime("%Y-%m-%d") if pdf.currentDate else None,
-    #                     username=username
-    #                 )
-    #                 for pdf in pdfs
-    #             ]
-    #         )
-
-    #         response_array.append(response)
-
-
-    #         logger.info(f"Found record with ID: {book_followup.id} for subject: {decoded_subject}")
-    #         return {
-    #             "data":response_array
-    #         }
-
-    #     except HTTPException:
-    #         raise
-    #     except Exception as e:
-    #         logger.error(f"Error in getRecordBySubject: {str(e)}", exc_info=True)
-    #         raise HTTPException(
-    #             status_code=500,
-    #             detail="Internal server error while fetching record"
-    #         )
-
-
-
-
-
-
-
-
-
-
-
-
-
     @staticmethod
     async def reportBookFollowUpByDepartment(
         db: AsyncSession,
         bookType: Optional[str] = None,
         bookStatus: Optional[str] = None,
-        check: Optional[bool] = False,
         startDate: Optional[str] = None,
         endDate: Optional[str] = None,
         coID: Optional[str] = None,
@@ -2073,9 +1931,8 @@ class BookFollowUpService:
             db: AsyncSession for database access
             bookType: Optional filter for book type
             bookStatus: Optional filter for book status
-            check: Boolean to enable/disable date range filtering
-            startDate: Start date for filtering (YYYY-MM-DD) if check is True
-            endDate: End date for filtering (YYYY-MM-DD) if check is True
+            startDate: Start date for filtering (YYYY-MM-DD)
+            endDate: End date for filtering (YYYY-MM-DD)
             coID: Optional filter for committee ID
             deID: Optional filter for department ID
 
@@ -2089,18 +1946,9 @@ class BookFollowUpService:
                 filters.append(BookFollowUpTable.bookType == bookType.strip())
             if bookStatus:
                 filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
-            
-            # Add department filter
-            if deID:
-                filters.append(BookFollowUpTable.deID == deID.strip())
-                logger.debug(f"Applying department filter: deID={deID}")
 
-            # Step 2: Add date filter based on check
-            if check:
-                if not startDate or not endDate:
-                    logger.error("startDate and endDate are required when check is True")
-                    raise HTTPException(status_code=400, detail="startDate and endDate are required when check is True")
-                
+            # Step 2: Add date filter if dates are provided
+            if startDate and endDate:
                 try:
                     start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
                     end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
@@ -2113,11 +1961,8 @@ class BookFollowUpService:
                 except ValueError as e:
                     logger.error(f"Invalid date format for startDate or endDate: {str(e)}")
                     raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-            else:
-                filters.append(BookFollowUpTable.currentDate.is_(None))
-                logger.debug("Applying currentDate IS NULL filter")
 
-            # Step 3: Build main query with optional joins
+            # Step 3: Build main query joining through junction table
             stmt = (
                 select(
                     BookFollowUpTable.id,
@@ -2135,18 +1980,29 @@ class BookFollowUpService:
                     BookFollowUpTable.currentDate,
                     BookFollowUpTable.userID,
                     Users.username,
-                    BookFollowUpTable.deID,
+                    Department.deID,
                     Department.departmentName,
-                    Committee.Com
+                    Committee.Com,
+                    Committee.coID
                 )
                 .outerjoin(Users, BookFollowUpTable.userID == Users.id)
-                .outerjoin(Department, BookFollowUpTable.deID == Department.deID)
-                .outerjoin(Committee, Department.coID == Committee.coID)
+                .outerjoin(
+                    CommitteeDepartmentsJunction,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .outerjoin(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
+                .outerjoin(Department, CommitteeDepartmentsJunction.deID == Department.deID)
+                .order_by(BookFollowUpTable.currentDate)
             )
             
-            # Apply committee filter if provided
+            # Apply department filter via junction
+            if deID:
+                filters.append(Department.deID == int(deID.strip()))
+                logger.debug(f"Applying department filter: deID={deID}")
+            
+            # Apply committee filter via junction
             if coID:
-                filters.append(Committee.coID == coID.strip())
+                filters.append(Committee.coID == int(coID.strip()))
                 logger.debug(f"Applying committee filter: coID={coID}")
             
             # Apply filters and execute query
@@ -2161,13 +2017,14 @@ class BookFollowUpService:
                 # Query for specific department/committee info
                 dept_query = (
                     select(Department.departmentName, Committee.Com)
-                    .outerjoin(Committee, Department.coID == Committee.coID)
+                    .join(CommitteeDepartmentsJunction, Department.deID == CommitteeDepartmentsJunction.deID)
+                    .join(Committee, CommitteeDepartmentsJunction.coID == Committee.coID)
                 )
                 
                 if deID:
-                    dept_query = dept_query.where(Department.deID == deID.strip())
-                elif coID:
-                    dept_query = dept_query.where(Committee.coID == coID.strip())
+                    dept_query = dept_query.where(Department.deID == int(deID.strip()))
+                if coID:
+                    dept_query = dept_query.where(Committee.coID == int(coID.strip()))
                 
                 dept_result = await db.execute(dept_query)
                 dept_info = dept_result.first()
@@ -2217,6 +2074,218 @@ class BookFollowUpService:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error in reportBookFollowUpByDepartment: {str(e)}")
-            raise HTTPException(status_code=500, detail="Error retrieving filtered department records.")    
+            logger.error(f"Error in reportBookFollowUpByDepartment: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Error retrieving filtered department records.")
+
+
+
+
+    @staticmethod
+    async def getAllCommitteesWithDepartments(
+        db: AsyncSession,
+        bookStatus: Optional[str] = None,
+        startDate: Optional[str] = None,
+        endDate: Optional[str] = None,
+        coID: Optional[str] = None,
+        deID: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all unique committees that have books in BookFollowUpTable with filtering,
+        along with all their associated departments.
         
+        Args:
+            bookStatus: Optional filter for book status
+            startDate: Optional start date for filtering (YYYY-MM-DD)
+            endDate: Optional end date for filtering (YYYY-MM-DD)
+            coID: Optional filter for specific committee
+            deID: Optional filter for specific department
+        
+        Returns:
+            List of dictionaries containing committee info with nested departments
+        """
+        try:
+            # Build filters
+            filters = []
+            
+            # Book status filter
+            if bookStatus:
+                filters.append(BookFollowUpTable.bookStatus == bookStatus.strip().lower())
+            
+            # Date range filter
+            if startDate and endDate:
+                try:
+                    start_date = datetime.strptime(startDate, '%Y-%m-%d').date()
+                    end_date = datetime.strptime(endDate, '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        raise HTTPException(status_code=400, detail="startDate cannot be after endDate")
+                    filters.append(BookFollowUpTable.currentDate.isnot(None))
+                    filters.append(BookFollowUpTable.currentDate.between(start_date, end_date))
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+            
+            # Committee filter
+            if coID:
+                filters.append(Committee.coID == int(coID.strip()))
+            
+            # Department filter
+            if deID:
+                filters.append(Department.deID == int(deID.strip()))
+            
+            # Query to get all committees with their departments through junction
+            stmt = (
+                select(
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID,
+                    Department.departmentName
+                )
+                .distinct()
+                .join(
+                    CommitteeDepartmentsJunction,
+                    Committee.coID == CommitteeDepartmentsJunction.coID
+                )
+                .join(
+                    Department,
+                    Department.deID == CommitteeDepartmentsJunction.deID
+                )
+                .join(
+                    BookFollowUpTable,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .where(
+                    and_(
+                        BookFollowUpTable.id.isnot(None),
+                        *filters
+                    )
+                )
+                .order_by(Committee.Com, Department.departmentName)
+            )
+            
+            result = await db.execute(stmt)
+            rows = result.fetchall()
+            
+            # Group departments by committee
+            committees_dict = {}
+            for row in rows:
+                co_id = str(row.coID)
+                
+                if co_id not in committees_dict:
+                    committees_dict[co_id] = {
+                        "coID": co_id,
+                        "Com": row.Com,
+                        "departments": []
+                    }
+                
+                # Add department if not already added
+                dept_exists = any(
+                    dept["deID"] == str(row.deID) 
+                    for dept in committees_dict[co_id]["departments"]
+                )
+                
+                if not dept_exists and row.deID is not None:
+                    committees_dict[co_id]["departments"].append({
+                        "deID": str(row.deID),
+                        "departmentName": row.departmentName
+                    })
+            
+            # Convert to list
+            committees = list(committees_dict.values())
+            
+            logger.info(
+                f"Found {len(committees)} committees with departments "
+                f"(filters: bookStatus={bookStatus}, dates={startDate} to {endDate}, "
+                f"coID={coID}, deID={deID})"
+            )
+            return committees
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in getAllCommitteesWithDepartments: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Error retrieving committees with departments.")
+
+
+
+    @staticmethod
+    async def getDepartmentsByCommittee(
+        db: AsyncSession,
+        coID: str
+    ) -> Dict[str, Any]:
+        """
+        Get all departments for a specific committee that have books in BookFollowUpTable.
+        
+        Args:
+            coID: Committee ID to filter by
+            
+        Returns:
+            Dictionary with committee info and its departments
+        """
+        try:
+            # Query to get committee info with its departments
+            stmt = (
+                select(
+                    Committee.coID,
+                    Committee.Com,
+                    Department.deID,
+                    Department.departmentName
+                )
+                .distinct()
+                .join(
+                    CommitteeDepartmentsJunction,
+                    Committee.coID == CommitteeDepartmentsJunction.coID
+                )
+                .join(
+                    Department,
+                    Department.deID == CommitteeDepartmentsJunction.deID
+                )
+                .join(
+                    BookFollowUpTable,
+                    BookFollowUpTable.junctionID == CommitteeDepartmentsJunction.id
+                )
+                .where(
+                    and_(
+                        Committee.coID == int(coID.strip()),
+                        BookFollowUpTable.id.isnot(None)
+                    )
+                )
+                .order_by(Department.departmentName)
+            )
+            
+            result = await db.execute(stmt)
+            rows = result.fetchall()
+            
+            if not rows:
+                logger.warning(f"No departments found for committee coID={coID}")
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No departments found for committee with coID={coID}"
+                )
+            
+            # Extract committee info (same for all rows)
+            committee_info = {
+                "coID": str(rows[0].coID),
+                "Com": rows[0].Com
+            }
+            
+            # Extract departments
+            departments = []
+            for row in rows:
+                if row.deID is not None:
+                    departments.append({
+                        "deID": str(row.deID),
+                        "departmentName": row.departmentName
+                    })
+            
+            logger.info(f"Found {len(departments)} departments for committee coID={coID}")
+            
+            return {
+                **committee_info,
+                "departments": departments,
+                "totalDepartments": len(departments)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error in getDepartmentsByCommittee: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Error retrieving departments for committee.")

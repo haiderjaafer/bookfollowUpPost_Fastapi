@@ -1109,14 +1109,12 @@ class DepartmentReportWithTotal(BaseModel):
 
 
 
-
 @bookFollowUpRouter.get("/report-with-stats-department", response_model=DepartmentReportWithTotal)
 async def get_filtered_department_report(
     bookType: Optional[str] = Query(None, description="Filter by book type"),
     bookStatus: Optional[str] = Query(None, description="Filter by book status"),
-    check: Optional[bool] = Query(False, description="Enable date range filtering (True) or NULL currentDate (False)"),
-    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD) for check=True"),
-    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD) for check=True"),
+    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     coID: Optional[str] = Query(None, description="Filter by committee ID"),
     deID: Optional[str] = Query(None, description="Filter by department ID"),
     db: AsyncSession = Depends(get_async_db)
@@ -1124,9 +1122,124 @@ async def get_filtered_department_report(
     """
     Get filtered book follow-up records by department and committee.
     Returns records with total count and department/committee info.
+    Date filtering is applied when both startDate and endDate are provided.
     """
-    logger.debug(f"Received filtered report request: bookType={bookType}, bookStatus={bookStatus}, check={check}, startDate={startDate}, endDate={endDate}, coID={coID}, deID={deID}")
-    return await BookFollowUpService.reportBookFollowUpByDepartment(db, bookType, bookStatus, check, startDate, endDate, coID, deID)
+    logger.debug(
+        f"Received filtered department report request: "
+        f"bookType={bookType}, bookStatus={bookStatus}, "
+        f"startDate={startDate}, endDate={endDate}, coID={coID}, deID={deID}"
+    )
+    return await BookFollowUpService.reportBookFollowUpByDepartment(
+        db, bookType, bookStatus, startDate, endDate, coID, deID
+    )
 
 
 
+# For /committees-with-departments endpoint
+class DepartmentInfo(BaseModel):
+    deID: str
+    departmentName: str
+
+class CommitteeWithDepartmentsResponse(BaseModel):
+    coID: str
+    Com: str
+    departments: List[DepartmentInfo]
+
+
+# For /report-with-stats-department endpoint  
+class DepartmentReportResponse(BaseModel):
+    serialNo: int
+    id: int
+    bookType: Optional[str] = None
+    bookNo: Optional[str] = None
+    bookDate: Optional[str] = None
+    directoryName: Optional[str] = None
+    incomingNo: Optional[str] = None
+    incomingDate: Optional[str] = None
+    subject: Optional[str] = None
+    destination: Optional[str] = None
+    bookAction: Optional[str] = None
+    bookStatus: Optional[str] = None
+    notes: Optional[str] = None
+    currentDate: Optional[str] = None
+    userID: Optional[int] = None
+    username: Optional[str] = None
+    deID: Optional[str] = None
+    Com: Optional[str] = None
+    departmentName: Optional[str] = None
+
+class DepartmentReportWithTotal(BaseModel):
+    records: List[DepartmentReportResponse]
+    total: int
+    Com: Optional[str] = None
+    departmentName: Optional[str] = None
+
+@bookFollowUpRouter.get("/committees-with-departments", response_model=List[CommitteeWithDepartmentsResponse])
+async def get_committees_with_departments(
+    bookStatus: Optional[str] = Query(None, description="Filter by book status"),
+    startDate: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    endDate: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    coID: Optional[str] = Query(None, description="Filter by specific committee ID"),
+    deID: Optional[str] = Query(None, description="Filter by specific department ID"),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Get all committees that have books with their departments, with optional filtering.
+    
+    Query Parameters:
+        - bookStatus: Filter by book status (e.g., "قيد الانجاز", "منجز")
+        - startDate: Start date for date range filter (YYYY-MM-DD)
+        - endDate: End date for date range filter (YYYY-MM-DD)
+        - coID: Filter by specific committee ID
+        - deID: Filter by specific department ID
+    
+    Returns:
+        List of committees with nested department arrays
+        
+    Examples:
+        - Get all: /committees-with-departments
+        - Filter by status: /committees-with-departments?bookStatus=قيد الانجاز
+        - Filter by dates: /committees-with-departments?startDate=2025-09-01&endDate=2025-09-30
+        - Filter by committee: /committees-with-departments?coID=5
+        - Combined: /committees-with-departments?bookStatus=قيد الانجاز&startDate=2025-09-01&endDate=2025-09-30&coID=5
+    """
+    logger.debug(
+        f"Fetching committees with departments - "
+        f"bookStatus={bookStatus}, startDate={startDate}, endDate={endDate}, "
+        f"coID={coID}, deID={deID}"
+    )
+    return await BookFollowUpService.getAllCommitteesWithDepartments(
+        db, bookStatus, startDate, endDate, coID, deID
+    )
+
+
+class DepartmentInfo(BaseModel):
+    deID: str
+    departmentName: str
+
+class CommitteeDepartmentsResponse(BaseModel):
+    coID: str
+    Com: str
+    departments: List[DepartmentInfo]
+    totalDepartments: int
+
+
+@bookFollowUpRouter.get("/committees/{coID}/departments", response_model=CommitteeDepartmentsResponse)
+async def get_departments_by_committee(
+    coID: str,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Get all departments for a specific committee that have books.
+    
+    Args:
+        coID: Committee ID
+        
+    Returns:
+        Committee info with its departments array
+        
+    Example:
+        GET /api/bookFollowUp/committees/5/departments
+    """
+    logger.debug(f"Fetching departments for committee coID={coID}")
+    return await BookFollowUpService.getDepartmentsByCommittee(db, coID)
