@@ -90,7 +90,8 @@ class BookFollowUpService:
     @staticmethod
     async def insert_book(db: AsyncSession, book: BookFollowUpCreate) -> int:
         """
-        Insert new book record with SQL Server optimized date handling
+        Insert new book record with SQL Server optimized date handling.
+        Handles optional incomingNo and incomingDate for SECRET book types.
         """
         book_dict = book.model_dump(exclude_none=True)
         
@@ -98,16 +99,30 @@ class BookFollowUpService:
         for date_field in ['bookDate', 'incomingDate', 'currentDate']:
             if date_field in book_dict and book_dict[date_field]:
                 if isinstance(book_dict[date_field], str):
-                    book_dict[date_field] = datetime.strptime(
-                        book_dict[date_field], '%Y-%m-%d'
-                    ).date()
+                    try:
+                        book_dict[date_field] = datetime.strptime(
+                            book_dict[date_field], '%Y-%m-%d'
+                        ).date()
+                    except ValueError as e:
+                        print(f"Invalid date format for {date_field}: {book_dict[date_field]}")
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid date format for {date_field}. Use YYYY-MM-DD"
+                        )
+        
+        # For SECRET books, ensure both incomingNo and incomingDate are None
+        if book_dict.get('bookType') == 'سري':
+            book_dict['incomingNo'] = None
+            book_dict['incomingDate'] = None
+            print("Removed incomingNo and incomingDate for SECRET book type")
         
         new_book = BookFollowUpTable(**book_dict)
         db.add(new_book)
-        await db.flush()  # Get ID without full commit
+        await db.flush()
         book_id = new_book.id
-        print(f"Created book record with ID: {book_id}")
+        print(f"Created book record with ID: {book_id} (Type: {book_dict.get('bookType')})")
         return book_id
+  
 
     
     @staticmethod

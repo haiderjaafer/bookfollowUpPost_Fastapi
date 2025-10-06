@@ -37,19 +37,24 @@ if not logger.handlers:  # Avoid duplicate handlers
 #  Create router with a prefix and tag for grouping endpoints
 bookFollowUpRouter = APIRouter(prefix="/api/bookFollowUp", tags=["BookFollowUp"])
 
+from enum import Enum
 
+class BookType(str, Enum):
+    EXTERNAL = "خارجي"
+    INTERNAL = "داخلي"
+    SECRET = "سري"
+    FAX = "فاكس"
 
-# Updated Route
 @bookFollowUpRouter.post("")
 async def add_book_with_pdf(
     bookNo: str = Form(...),
     bookDate: str = Form(...),
-    bookType: str = Form(...),
+    bookType: BookType = Form(...),
     directoryName: str = Form(...),
-    coID: int = Form(...),  # Single Committee ID
-    deIDs: str = Form(...),  # Comma-separated Department IDs: "11,15,21"
-    incomingNo: str = Form(...),
-    incomingDate: str = Form(...),
+    coID: int = Form(...),
+    deIDs: str = Form(...),
+    incomingNo: Optional[str] = Form(None),  # Make optional
+    incomingDate: Optional[str] = Form(None),
     subject: str = Form(...),
     bookAction: str = Form(...),
     bookStatus: str = Form(...),
@@ -64,21 +69,41 @@ async def add_book_with_pdf(
         department_ids = [int(dept_id.strip()) for dept_id in deIDs.split(',')]
         print(f"Committee {coID} will be associated with departments: {department_ids}")
         
-        # Step 2: Get or create multiple junctions for committee-department pairs
+        # Step 2: Get or create multiple junctions
         junction_ids = []
         for dept_id in department_ids:
             junction_id = await BookFollowUpService.get_or_create_junction(db, coID, dept_id)
             junction_ids.append(junction_id)
             print(f"Junction ID for Committee {coID} + Department {dept_id}: {junction_id}")
         
-        # Step 3: Create book data (use first junction as primary reference)
+        # Step 3: Handle incomingNo and incomingDate based on bookType
+        final_incoming_no = None
+        final_incoming_date = None
+        
+        if bookType != BookType.SECRET:
+            # For non-secret books, validate and use incoming data
+            if not incomingNo or not incomingDate:
+                raise HTTPException(
+                    status_code=400,
+                    detail="incomingNo and incomingDate are required for non-secret book types"
+                )
+            final_incoming_no = incomingNo
+            final_incoming_date = incomingDate
+            print(f"Non-secret book: Using incomingNo={final_incoming_no}, incomingDate={final_incoming_date}")
+        else:
+            # For secret books, set both to None
+            final_incoming_no = None
+            final_incoming_date = None
+            print("Secret book: incomingNo and incomingDate will be NULL")
+        
+        # Step 4: Create book data
         book_data = BookFollowUpCreate(
             bookNo=bookNo,
             bookDate=bookDate,
-            bookType=bookType,
+            bookType=bookType.value,
             directoryName=directoryName,
-            incomingNo=incomingNo,
-            incomingDate=incomingDate,
+            incomingNo=final_incoming_no,  # Will be None if SECRET
+            incomingDate=final_incoming_date,  # Will be None if SECRET
             subject=subject,
             destination="destination",
             bookAction=bookAction,
@@ -86,35 +111,33 @@ async def add_book_with_pdf(
             notes=notes,
             currentDate=datetime.today().strftime('%Y-%m-%d'),
             userID=userID,
-            junctionID=junction_ids[0]  # Primary junction reference
+            junctionID=junction_ids[0]
         )
         
-        print(f"book_data...........: {book_data}")
-        # Step 4: Insert book
+        print(f"book_data: {book_data}")
+        
+        # Step 5: Insert book
         book_id = await BookFollowUpService.insert_book(db, book_data)
         print(f"Inserted book with ID: {book_id}")
         
-        # Step 5: Create bridge records for ALL departments (many-to-many)
+        # Step 6: Create bridge records
         bridge_ids = []
         for junction_id in junction_ids:
             bridge_id = await BookFollowUpService.create_book_junction_bridge(db, book_id, junction_id)
             bridge_ids.append(bridge_id)
             print(f"Created bridge record {bridge_id} for book {book_id} and junction {junction_id}")
         
-        # Step 6: Handle PDF processing (existing logic)
+        # Step 7: Handle PDF processing
         count = await PDFService.get_pdf_count(db, book_id)
         print(f"PDF count for book {book_id}: {count}")
         
-        # Save file
         upload_dir = settings.PDF_UPLOAD_PATH
         with file.file as f:
             pdf_path = save_pdf_to_server(f, bookNo, bookDate, count, upload_dir)
         print(f"Saved PDF to: {pdf_path}")
         
-        # Close upload stream
         file.file.close()
         
-        # Insert PDF record
         pdf_data = PDFCreate(
             bookID=book_id,
             bookNo=bookNo,
@@ -126,7 +149,7 @@ async def add_book_with_pdf(
         await PDFService.insert_pdf(db, pdf_data)
         print(f"Inserted PDF record: {pdf_path}")
         
-        # Delete original file (with delay)
+        # Delete original file
         scanner_path = os.path.join(settings.PDF_SOURCE_PATH, username, file.filename)
         print(f"Attempting to delete: {scanner_path}")
         if os.path.isfile(scanner_path):
@@ -135,14 +158,19 @@ async def add_book_with_pdf(
             print(f"File not found for deletion: {scanner_path}")
         
         return {
-            "message": "Book and PDF saved successfully with multiple departments", 
+            "message": f"Book saved successfully - Type: {bookType.value}",
             "bookID": book_id,
+            "bookType": bookType.value,
             "committee_id": coID,
             "department_ids": department_ids,
             "junction_ids": junction_ids,
-            "bridge_ids": bridge_ids
+            "bridge_ids": bridge_ids,
+            "incomingNo_saved": final_incoming_no is not None,
+            "incomingDate_saved": final_incoming_date is not None
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Error in add_book_with_pdf: {str(e)}")
         await db.rollback()
